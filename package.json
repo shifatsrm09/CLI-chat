@@ -1,20 +1,15 @@
 {
   "name": "cli-chat",
   "version": "1.0.0",
+  "description": "CLI WebSocket chat client",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "test": "echo \"Error: no test specified\" && exit 1",
-    "client": "node client.js",
-    "client:local": "SERVER_URL=ws://localhost:8080 node client.js",
-    "client:prod": "SERVER_URL=wss://cli-chat-ic6w.onrender.com node client.js"
-
-    
+    "client": "node client.js"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
-  "description": "",
   "dependencies": {
     "ws": "^8.19.0"
   }

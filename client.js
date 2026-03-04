@@ -3,8 +3,11 @@ const readline = require('readline');
 const fs = require('fs');
 const path = require('path');
 
-const SERVER_URL =
-    process.env.SERVER_URL || "ws://localhost:8080";
+// Production server (Render)
+const SERVER_URL = "wss://cli-chat-ic6w.onrender.com";
+
+// Local development server
+// const SERVER_URL = "ws://localhost:8080";
 
 const rl = readline.createInterface({
     input: process.stdin,
