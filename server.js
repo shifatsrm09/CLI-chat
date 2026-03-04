@@ -8,15 +8,16 @@ const wss = new WebSocket.Server({
 });
 
 let clients = [];
+const MAX_CLIENTS = 5;
 
 console.log(`Server running on port ${PORT}`);
 
 wss.on('connection', function connection(ws) {
 
-    if (clients.length >= 2) {
+    if (clients.length >= MAX_CLIENTS) {
         ws.send(JSON.stringify({
             type: "system",
-            content: "Server full (only 2 clients allowed)"
+            content: "Server full (max 5 users allowed)"
         }));
         ws.close();
         return;
@@ -27,7 +28,7 @@ wss.on('connection', function connection(ws) {
 
     ws.on('message', function incoming(message, isBinary) {
 
-        // If binary → forward directly
+        // Binary file transfer
         if (isBinary) {
             clients.forEach(client => {
                 if (client !== ws && client.readyState === WebSocket.OPEN) {
@@ -45,6 +46,16 @@ wss.on('connection', function connection(ws) {
             broadcast({
                 type: "system",
                 content: `${ws.username} joined the chat`
+            }, ws);
+
+        } else if (data.type === "file-meta") {
+
+            // Forward file request including sender
+            broadcast({
+                type: "file-meta",
+                from: data.from,
+                filename: data.filename,
+                size: data.size
             }, ws);
 
         } else {

@@ -7,7 +7,7 @@ const path = require('path');
 const SERVER_URL = "wss://cli-chat-ic6w.onrender.com";
 
 // Local development server
-// const SERVER_URL = "ws://localhost:8080";
+//const SERVER_URL = "ws://localhost:8080";
 
 const rl = readline.createInterface({
     input: process.stdin,
@@ -21,6 +21,13 @@ let pendingFileMeta = null;
 rl.question("Enter your username: ", (name) => {
 
     username = name.trim();
+
+    connectToServer();
+});
+
+function connectToServer() {
+
+    console.log("Connecting to server...");
 
     ws = new WebSocket(SERVER_URL);
 
@@ -39,7 +46,16 @@ rl.question("Enter your username: ", (name) => {
     });
 
     ws.on('message', handleMessage);
-});
+
+    ws.on('close', () => {
+        console.log("Connection lost. Retrying in 3 seconds...");
+        setTimeout(connectToServer, 3000);
+    });
+
+    ws.on('error', () => {
+        console.log("Server unavailable. Retrying...");
+    });
+}
 
 
 function handleInput(input) {
@@ -102,7 +118,7 @@ function handleMessage(data, isBinary) {
     if (msg.type === "file-meta") {
 
         rl.question(
-            `\nReceive ${msg.filename} (${msg.size} bytes)? Y/N: `,
+            `\n${msg.from} wants to send ${msg.filename} (${msg.size} bytes). Accept? Y/N: `,
             (answer) => {
 
                 if (answer.toLowerCase() === "y") {
@@ -142,7 +158,7 @@ function handleMessage(data, isBinary) {
 }
 
 
-// Cleanly print a line without breaking prompt
+// Clean terminal print
 function printLine(text) {
     process.stdout.clearLine(0);
     process.stdout.cursorTo(0);
