@@ -3,7 +3,8 @@ const readline = require('readline');
 const fs = require('fs');
 const path = require('path');
 
-const SERVER_URL = "ws://localhost:8080";
+const SERVER_URL =
+    process.env.SERVER_URL || "ws://localhost:8080";
 
 const rl = readline.createInterface({
     input: process.stdin,
