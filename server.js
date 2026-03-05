@@ -40,22 +40,21 @@ wss.on('connection', function connection(ws) {
 
         const data = JSON.parse(message.toString());
 
-            if (data.type === "join") {
-                    ws.username = data.username;
+        if (data.type === "join") {
+            ws.username = data.username;
 
-                    ws.send(JSON.stringify({
-                        type: "system",
-                        content: `Connected to default room: 8888`
-                    }));
+            ws.send(JSON.stringify({
+                type: "system",
+                content: `Connected to default room: 8888`
+            }));
 
-                    broadcast({
-                        type: "system",
-                        content: `${ws.username} joined the chat`
-                    }, ws);
-                    
+            broadcast({
+                type: "system",
+                content: `${ws.username} joined the chat`
+            }, ws);
+
         } else if (data.type === "file-meta") {
 
-            // Forward file request including sender
             broadcast({
                 type: "file-meta",
                 from: data.from,
@@ -69,6 +68,15 @@ wss.on('connection', function connection(ws) {
     });
 
     ws.on('close', () => {
+
+        // Notify others that user left
+        if (ws.username) {
+            broadcast({
+                type: "system",
+                content: `${ws.username} left the chat`
+            }, ws);
+        }
+
         clients = clients.filter(client => client !== ws);
     });
 });
