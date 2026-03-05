@@ -40,14 +40,19 @@ wss.on('connection', function connection(ws) {
 
         const data = JSON.parse(message.toString());
 
-        if (data.type === "join") {
-            ws.username = data.username;
+            if (data.type === "join") {
+                    ws.username = data.username;
 
-            broadcast({
-                type: "system",
-                content: `${ws.username} joined the chat`
-            }, ws);
+                    ws.send(JSON.stringify({
+                        type: "system",
+                        content: `Connected to default room: 8888`
+                    }));
 
+                    broadcast({
+                        type: "system",
+                        content: `${ws.username} joined the chat`
+                    }, ws);
+                    
         } else if (data.type === "file-meta") {
 
             // Forward file request including sender
