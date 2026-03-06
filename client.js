@@ -4,10 +4,10 @@ const fs = require('fs');
 const path = require('path');
 
 // Production server (Render)
-const SERVER_URL = "wss://cli-chat-ic6w.onrender.com";
+//const SERVER_URL = "wss://cli-chat-ic6w.onrender.com";
 
 // Local development server
-//const SERVER_URL = "ws://localhost:8080";
+const SERVER_URL = "ws://localhost:8080";
 
 const rl = readline.createInterface({
     input: process.stdin,

@@ -1,3 +1,5 @@
+require('dotenv').config();
+
 const WebSocket = require('ws');
 
 const PORT = process.env.PORT || 8080;
@@ -11,6 +13,64 @@ let clients = [];
 const MAX_CLIENTS = 5;
 
 console.log(`Server running on port ${PORT}`);
+console.log("API KEY:", process.env.OPENROUTER_API_KEY ? "Loaded" : "Missing");
+
+async function askAI(prompt) {
+
+    try {
+
+        console.log("AI PROMPT:", prompt);
+
+        const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+            method: "POST",
+            headers: {
+                "Authorization": `Bearer ${process.env.OPENROUTER_API_KEY}`,
+                "Content-Type": "application/json",
+                "HTTP-Referer": "http://localhost",
+                "X-Title": "cli-chat"
+            },
+            body: JSON.stringify({
+               model: "openrouter/free",
+                max_tokens: 400,
+                messages: [
+                    {
+                        role: "user",
+                        content: prompt
+                    }
+                ]
+            })
+        });
+
+        const data = await response.json();
+
+        console.log("AI RAW RESPONSE:", JSON.stringify(data, null, 2));
+
+        if (!response.ok) {
+            console.log("OPENROUTER ERROR:", data);
+            return "AI error: " + (data.error?.message || "unknown error");
+        }
+
+        if (data.choices && data.choices.length > 0) {
+
+            const content = data.choices[0].message?.content;
+
+            if (content) {
+                return content;
+            }
+
+            return "AI returned an empty message.";
+        }
+
+        return "AI returned no choices.";
+
+    } catch (err) {
+
+        console.log("AI ERROR:", err);
+        return "AI request failed.";
+
+    }
+
+}
 
 wss.on('connection', function connection(ws) {
 
@@ -26,7 +86,7 @@ wss.on('connection', function connection(ws) {
     ws.username = null;
     clients.push(ws);
 
-    ws.on('message', function incoming(message, isBinary) {
+    ws.on('message', async function incoming(message, isBinary) {
 
         // Binary file transfer
         if (isBinary) {
@@ -40,7 +100,9 @@ wss.on('connection', function connection(ws) {
 
         const data = JSON.parse(message.toString());
 
+        // User joining
         if (data.type === "join") {
+
             ws.username = data.username;
 
             ws.send(JSON.stringify({
@@ -53,7 +115,32 @@ wss.on('connection', function connection(ws) {
                 content: `${ws.username} joined the chat`
             }, ws);
 
-        } else if (data.type === "file-meta") {
+        }
+
+        // AI command
+        else if (data.type === "message" && data.content.startsWith("/ai ")) {
+
+            const prompt = data.content.replace("/ai ", "");
+
+            broadcast({
+                type: "system",
+                content: `${ws.username} asked AI...`
+            }, ws);
+
+            const aiResponse = await askAI(prompt);
+
+            console.log("AI FINAL RESPONSE:", aiResponse);
+
+            broadcast({
+                type: "message",
+                from: "AI",
+                content: aiResponse
+            });
+
+        }
+
+        // File transfer
+        else if (data.type === "file-meta") {
 
             broadcast({
                 type: "file-meta",
@@ -62,14 +149,17 @@ wss.on('connection', function connection(ws) {
                 size: data.size
             }, ws);
 
-        } else {
+        }
+
+        // Normal chat message
+        else {
             broadcast(data, ws);
         }
+
     });
 
     ws.on('close', () => {
 
-        // Notify others that user left
         if (ws.username) {
             broadcast({
                 type: "system",
@@ -79,12 +169,19 @@ wss.on('connection', function connection(ws) {
 
         clients = clients.filter(client => client !== ws);
     });
+
 });
 
 function broadcast(msg, sender) {
+
     clients.forEach(client => {
+
         if (client !== sender && client.readyState === WebSocket.OPEN) {
+
             client.send(JSON.stringify(msg));
+
         }
+
     });
+
 }
