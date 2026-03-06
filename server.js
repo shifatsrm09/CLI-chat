@@ -12,95 +12,210 @@ const wss = new WebSocket.Server({
 let clients = [];
 const MAX_CLIENTS = 5;
 
+let lastAIRequest = 0;
+const AI_COOLDOWN = 3000;
+
 console.log(`Server running on port ${PORT}`);
 console.log("API KEY:", process.env.OPENROUTER_API_KEY ? "Loaded" : "Missing");
 
+
+function extractAIContent(data) {
+
+    if (!data || !data.choices || data.choices.length === 0) {
+        return null;
+    }
+
+    const choice = data.choices[0];
+
+    // Standard OpenAI format
+    if (choice.message && choice.message.content) {
+
+        if (typeof choice.message.content === "string") {
+            return choice.message.content;
+        }
+
+        if (Array.isArray(choice.message.content)) {
+            return choice.message.content
+                .map(part => part.text || part.content || "")
+                .join("");
+        }
+
+    }
+
+    // Some models return text directly
+    if (choice.text) {
+        return choice.text;
+    }
+
+    // Reasoning models (like DeepSeek)
+    if (choice.reasoning && choice.reasoning.text) {
+        return choice.reasoning.text;
+    }
+
+    // Some models return output_text
+    if (choice.output_text) {
+        return choice.output_text;
+    }
+
+    return null;
+}
+
+
 async function askAI(prompt) {
+
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 30000);
 
     try {
 
         console.log("AI PROMPT:", prompt);
 
         const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+
             method: "POST",
+
             headers: {
                 "Authorization": `Bearer ${process.env.OPENROUTER_API_KEY}`,
                 "Content-Type": "application/json",
                 "HTTP-Referer": "http://localhost",
                 "X-Title": "cli-chat"
             },
+
+            signal: controller.signal,
+
             body: JSON.stringify({
-               model: "openrouter/free",
-                max_tokens: 400,
+                model: "openrouter/free",
+                max_tokens: 1500,
                 messages: [
+                    {
+                        role: "system",
+                        content: "Answer clearly and concisely. Do not include internal reasoning."
+                    },
                     {
                         role: "user",
                         content: prompt
                     }
                 ]
             })
+
         });
+
+        clearTimeout(timeout);
+
+        if (!response.ok) {
+
+            const text = await response.text();
+            console.log("OPENROUTER ERROR:", text);
+            return "AI service error.";
+
+        }
 
         const data = await response.json();
 
         console.log("AI RAW RESPONSE:", JSON.stringify(data, null, 2));
 
-        if (!response.ok) {
-            console.log("OPENROUTER ERROR:", data);
-            return "AI error: " + (data.error?.message || "unknown error");
+        let content = extractAIContent(data);
+
+        if (!content) {
+
+            console.log("UNKNOWN AI FORMAT:", JSON.stringify(data, null, 2));
+            return "AI returned an empty response.";
+
         }
 
-        if (data.choices && data.choices.length > 0) {
+        content = content.trim();
 
-            const content = data.choices[0].message?.content;
-
-            if (content) {
-                return content;
-            }
-
-            return "AI returned an empty message.";
+        if (content.length === 0) {
+            return "AI returned an empty response.";
         }
 
-        return "AI returned no choices.";
+        if (content.length > 2000) {
+            content = content.substring(0, 2000) + "\n\n[response truncated]";
+        }
+
+        return content;
 
     } catch (err) {
 
         console.log("AI ERROR:", err);
+
+        if (err.name === "AbortError") {
+            return "AI request timed out.";
+        }
+
         return "AI request failed.";
 
     }
 
 }
 
+
+
+function canUseAI() {
+
+    const now = Date.now();
+
+    if (now - lastAIRequest < AI_COOLDOWN) {
+        return false;
+    }
+
+    lastAIRequest = now;
+    return true;
+
+}
+
+
+
 wss.on('connection', function connection(ws) {
 
     if (clients.length >= MAX_CLIENTS) {
+
         ws.send(JSON.stringify({
             type: "system",
             content: "Server full (max 5 users allowed)"
         }));
+
         ws.close();
         return;
+
     }
 
     ws.username = null;
     clients.push(ws);
 
-    ws.on('message', async function incoming(message, isBinary) {
+    ws.on('message', function incoming(message, isBinary) {
 
-        // Binary file transfer
         if (isBinary) {
+
             clients.forEach(client => {
+
                 if (client !== ws && client.readyState === WebSocket.OPEN) {
+
                     client.send(message, { binary: true });
+
                 }
+
             });
+
             return;
+
         }
 
-        const data = JSON.parse(message.toString());
+        let data;
 
-        // User joining
+        try {
+
+            data = JSON.parse(message.toString());
+
+        } catch {
+
+            console.log("Invalid JSON received");
+            return;
+
+        }
+
+
+
         if (data.type === "join") {
 
             ws.username = data.username;
@@ -117,8 +232,20 @@ wss.on('connection', function connection(ws) {
 
         }
 
-        // AI command
+
+
         else if (data.type === "message" && data.content.startsWith("/ai ")) {
+
+            if (!canUseAI()) {
+
+                ws.send(JSON.stringify({
+                    type: "system",
+                    content: "AI cooldown active. Please wait a few seconds."
+                }));
+
+                return;
+
+            }
 
             const prompt = data.content.replace("/ai ", "");
 
@@ -127,19 +254,30 @@ wss.on('connection', function connection(ws) {
                 content: `${ws.username} asked AI...`
             }, ws);
 
-            const aiResponse = await askAI(prompt);
 
-            console.log("AI FINAL RESPONSE:", aiResponse);
+            askAI(prompt)
+                .then((aiResponse) => {
 
-            broadcast({
-                type: "message",
-                from: "AI",
-                content: aiResponse
-            });
+                    broadcast({
+                        type: "message",
+                        from: "AI",
+                        content: aiResponse
+                    });
+
+                })
+                .catch(() => {
+
+                    broadcast({
+                        type: "system",
+                        content: "AI failed to respond."
+                    });
+
+                });
 
         }
 
-        // File transfer
+
+
         else if (data.type === "file-meta") {
 
             broadcast({
@@ -151,26 +289,56 @@ wss.on('connection', function connection(ws) {
 
         }
 
-        // Normal chat message
+
+
+        else if (data.type === "file-accept") {
+
+            broadcast({
+                type: "file-accept"
+            }, ws);
+
+        }
+
+
+
+        else if (data.type === "file-reject") {
+
+            broadcast({
+                type: "file-reject"
+            }, ws);
+
+        }
+
+
+
         else {
+
             broadcast(data, ws);
+
         }
 
     });
+
+
 
     ws.on('close', () => {
 
         if (ws.username) {
+
             broadcast({
                 type: "system",
                 content: `${ws.username} left the chat`
             }, ws);
+
         }
 
         clients = clients.filter(client => client !== ws);
+
     });
 
 });
+
+
 
 function broadcast(msg, sender) {
 
