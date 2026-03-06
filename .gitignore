@@ -1,3 +1,4 @@
 node_modules/
 client.exe
 client-linux
+.env

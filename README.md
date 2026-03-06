@@ -1,2 +1,5 @@
-A CLI based chatting-file sharing VScode extension. <br>
-Meant to used for unholy purposes during CSE LAB. 
+A CLI based chatting-file sharing Tool <br>
+This branch consist of llm integration /ai <br>
+
+Currently, it uses OpenRouter:free available models <br>
+Might use Ollama for practical usecase during desparate time.
