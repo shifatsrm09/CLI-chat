@@ -24,6 +24,8 @@ wss.on('connection', function connection(ws) {
     }
 
     ws.username = null;
+    ws.joined = false;   // NEW: track successful join
+
     clients.push(ws);
 
     ws.on('message', function incoming(message, isBinary) {
@@ -38,14 +40,23 @@ wss.on('connection', function connection(ws) {
             return;
         }
 
-        const data = JSON.parse(message.toString());
+        let data;
+
+        // Safe JSON parsing (prevents server crash)
+        try {
+            data = JSON.parse(message.toString());
+        } catch {
+            return;
+        }
 
         if (data.type === "join") {
+
             ws.username = data.username;
+            ws.joined = true;
 
             ws.send(JSON.stringify({
                 type: "system",
-                content: `CONNECTED to default room: 8888`
+                content: `Connected to default room: 8888`
             }));
 
             broadcast({
@@ -63,21 +74,24 @@ wss.on('connection', function connection(ws) {
             }, ws);
 
         } else {
+
             broadcast(data, ws);
+
         }
     });
 
     ws.on('close', () => {
 
-        // Notify others that user left
-        if (ws.username) {
+        // Remove client first
+        clients = clients.filter(client => client !== ws);
+
+        // Only broadcast leave if user actually joined
+        if (ws.joined) {
             broadcast({
                 type: "system",
                 content: `${ws.username} left the chat`
             }, ws);
         }
-
-        clients = clients.filter(client => client !== ws);
     });
 });
 
