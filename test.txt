@@ -1,1 +1,0 @@
-Hello, there. This file is meant for testing purposes.
