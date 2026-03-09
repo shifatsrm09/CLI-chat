@@ -18,6 +18,55 @@ let ws;
 let username;
 let pendingFileMeta = null;
 
+/* -----------------------------
+   Slick Connection Progress Bar
+----------------------------- */
+
+let connectBarInterval;
+let progress = 0;
+
+const BAR_WIDTH = 22;
+const BAR_SPEED = 2000;
+
+function startConnectionBar() {
+
+    progress = 0;
+
+    connectBarInterval = setInterval(() => {
+
+        progress++;
+
+        if (progress > BAR_WIDTH) {
+            progress = 0; // loop if connection takes long
+        }
+
+        const percent = Math.floor((progress / BAR_WIDTH) * 100);
+
+        const bar =
+            "[" +
+            "=".repeat(progress) +
+            " ".repeat(BAR_WIDTH - progress) +
+            "]";
+
+        process.stdout.write(`\rConnecting ${bar} ${percent}%`);
+
+    }, BAR_SPEED);
+}
+
+function finishConnectionBar() {
+
+    clearInterval(connectBarInterval);
+
+    const bar = "[" + "=".repeat(BAR_WIDTH) + "]";
+
+    process.stdout.write(`\rConnecting ${bar} 100%\n`);
+   //console.log("[CONNECTED]");
+}
+
+/* -----------------------------
+   Username Prompt
+----------------------------- */
+
 rl.question("Enter your username: ", (name) => {
 
     username = name.trim();
@@ -25,14 +74,19 @@ rl.question("Enter your username: ", (name) => {
     connectToServer();
 });
 
+/* -----------------------------
+   Connect to Server
+----------------------------- */
+
 function connectToServer() {
 
-    console.log("Connecting to server...");
+    startConnectionBar();
 
     ws = new WebSocket(SERVER_URL);
 
     ws.on('open', () => {
-        console.log("Connected to server");
+
+        finishConnectionBar();
 
         ws.send(JSON.stringify({
             type: "join",
@@ -57,6 +111,9 @@ function connectToServer() {
     });
 }
 
+/* -----------------------------
+   User Input Handler
+----------------------------- */
 
 function handleInput(input) {
 
@@ -93,6 +150,9 @@ function handleInput(input) {
     }));
 }
 
+/* -----------------------------
+   Incoming Message Handler
+----------------------------- */
 
 function handleMessage(data, isBinary) {
 
@@ -157,8 +217,10 @@ function handleMessage(data, isBinary) {
     }
 }
 
+/* -----------------------------
+   Clean Terminal Print
+----------------------------- */
 
-// Clean terminal print
 function printLine(text) {
     process.stdout.clearLine(0);
     process.stdout.cursorTo(0);

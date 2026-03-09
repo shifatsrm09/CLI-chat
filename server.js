@@ -45,7 +45,7 @@ wss.on('connection', function connection(ws) {
 
             ws.send(JSON.stringify({
                 type: "system",
-                content: `Connected to default room: 8888`
+                content: `CONNECTED to default room: 8888`
             }));
 
             broadcast({
