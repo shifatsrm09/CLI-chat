@@ -117,7 +117,7 @@ function connectToServer() {
 
 function handleInput(input) {
 
-    if (input.startsWith("send ")) {
+    if (input.startsWith("/send ")) {
         const filename = input.substring(5).trim();
 
         if (!fs.existsSync(filename)) {
