@@ -26,7 +26,7 @@ let connectBarInterval;
 let progress = 0;
 
 const BAR_WIDTH = 22;
-const BAR_SPEED = 2000;
+const BAR_SPEED = 2500;
 
 function startConnectionBar() {
 
