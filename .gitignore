@@ -2,3 +2,4 @@ node_modules/
 client.exe
 client-linux
 .env
+models.txt
