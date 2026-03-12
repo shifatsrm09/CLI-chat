@@ -178,7 +178,7 @@ function handleMessage(data, isBinary) {
     if (msg.type === "file-meta") {
 
         rl.question(
-            `\n${msg.from} wants to send ${msg.filename} (${msg.size} bytes). Accept? Y/N: `,
+            `\n${msg.from} sends ${msg.filename} (${msg.size} bytes). Accept? [y/N]: `,
             (answer) => {
 
                 if (answer.toLowerCase() === "y") {
