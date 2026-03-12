@@ -360,23 +360,42 @@ function clearProgress() {
 /* ─── Connection progress bar ───────────────────────────────────── */
 
 let connectTimer;
-let connectTick = 0;
+let connectProgress = 0;
+
+const CONNECT_MAX      = 97;      // never exceed 97%
+const CONNECT_DURATION = 50000;   // 50 seconds total
+const CONNECT_STEP     = CONNECT_DURATION / CONNECT_MAX;
 
 function startProgressBar() {
-    connectTick = 0;
+
+    connectProgress = 0;
     process.stdout.write("\n");
+
     connectTimer = setInterval(() => {
-        connectTick = (connectTick + 1) % (BAR_WIDTH + 1);
-        const bar   = "=".repeat(connectTick) + " ".repeat(BAR_WIDTH - connectTick);
-        const pct   = Math.floor((connectTick / BAR_WIDTH) * 100);
-        process.stdout.write(`\r${c.gray}Connecting [${bar}] ${pct}%${c.reset}`);
-    }, 120);
+
+        if (connectProgress < CONNECT_MAX) {
+            connectProgress++;
+        }
+
+        const filled = Math.floor((connectProgress / 100) * BAR_WIDTH);
+        const bar = "=".repeat(filled) + " ".repeat(BAR_WIDTH - filled);
+
+        process.stdout.write(
+            `\r${c.gray}Connecting [${bar}] ${connectProgress}%${c.reset}`
+        );
+
+    }, CONNECT_STEP);
 }
 
 function finishProgressBar() {
+
     clearInterval(connectTimer);
+
     const bar = "=".repeat(BAR_WIDTH);
-    process.stdout.write(`\r${c.green}Connected  [${bar}] 100%${c.reset}\n\n`);
+
+    process.stdout.write(
+        `\r${c.green}Connected  [${bar}] 100%${c.reset}\n\n`
+    );
 }
 
 /* ─── Utilities ─────────────────────────────────────────────────── */
