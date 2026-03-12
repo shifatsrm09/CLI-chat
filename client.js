@@ -259,8 +259,8 @@ function handleMessage(raw) {
         /* ── Transfer complete ── */
         case "file-done":
             if (incomingFile) {
-                const full     = Buffer.concat(incomingFile.chunks);
-                const savePath = safeFilename(incomingFile.filename);
+                const full = Buffer.concat(incomingFile.chunks);
+                const savePath = incomingFile.filename; // overwrite existing file
                 fs.writeFileSync(savePath, full);
                 clearProgress();
                 print(`${c.green}✓ Saved: ${savePath} (${humanSize(full.length)})${c.reset}`);
