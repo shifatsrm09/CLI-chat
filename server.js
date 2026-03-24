@@ -16,7 +16,10 @@ let lastAIRequest = 0;
 const AI_COOLDOWN = 3000;
 
 console.log(`Server running on port ${PORT}`);
-console.log("API KEY:", process.env.OPENROUTER_API_KEY ? "Loaded" : "Missing");
+const USE_OLLAMA = true;  // Set to false to use OpenRouter instead
+
+console.log("Using Ollama:", USE_OLLAMA ? "Yes" : "No");
+console.log("API Key:", USE_OLLAMA ? (process.env.OLLAMA_API_KEY ? "Loaded" : "Not needed (local Ollama)") : (process.env.OPENROUTER_API_KEY ? "Loaded" : "Missing"));
 
 
 function extractAIContent(data) {
@@ -70,21 +73,40 @@ async function askAI(prompt) {
 
         console.log("AI PROMPT:", prompt);
 
-        const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+        let model = "qwen3-coder-next:cloud";
+        let apiKey = "";
+        let apiEndpoint = "https://ollama.com/v1/chat/completions";
+
+        if (!USE_OLLAMA) {
+            // OpenRouter configuration
+            model = "openrouter/free";
+            apiKey = process.env.OPENROUTER_API_KEY || "";
+            apiEndpoint = "https://openrouter.ai/api/v1/chat/completions";
+        } else {
+            // Ollama Cloud configuration
+            apiKey = process.env.OLLAMA_API_KEY || "";
+            // Use Ollama Cloud API (compatible with OpenAI format)
+            apiEndpoint = "https://ollama.com/v1/chat/completions";
+        }
+
+        const headers = {
+            "Content-Type": "application/json",
+        };
+
+        if (apiKey) {
+            headers["Authorization"] = `Bearer ${apiKey}`;
+        }
+
+        const response = await fetch(apiEndpoint, {
 
             method: "POST",
 
-            headers: {
-                "Authorization": `Bearer ${process.env.OPENROUTER_API_KEY}`,
-                "Content-Type": "application/json",
-                "HTTP-Referer": "http://localhost",
-                "X-Title": "cli-chat"
-            },
+            headers: headers,
 
             signal: controller.signal,
 
             body: JSON.stringify({
-                model: "openrouter/free",
+                model: model,
                 max_tokens: 1500,
                 messages: [
                     {
@@ -105,7 +127,7 @@ async function askAI(prompt) {
         if (!response.ok) {
 
             const text = await response.text();
-            console.log("OPENROUTER ERROR:", text);
+            console.log("AI API ERROR:", text);
             return "AI service error.";
 
         }
@@ -260,7 +282,7 @@ wss.on('connection', function connection(ws) {
 
                     broadcast({
                         type: "message",
-                        from: "AI",
+                        from: "Ollama",
                         content: aiResponse
                     });
 
