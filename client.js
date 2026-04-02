@@ -1,5 +1,5 @@
 /**
- * cli-chat — Client
+ * cli-chat — Client (Dual TEXT fixed)
  * Terminal chat + chunked file transfer (up to ~100 MB).
  *
  * Commands:
@@ -19,8 +19,11 @@ const path       = require("path");
 
 /* ─── Config ────────────────────────────────────────────────────── */
 
-const SERVER_URL = "wss://cli-chat-ic6w.onrender.com";
-//const SERVER_URL   = "ws://localhost:8080";
+const SERVERS = [
+    { name: "Render",    url: "wss://cli-chat-ic6w.onrender.com" },
+    { name: "Mirpur",    url: "ws://your-mirpur-server:8080" },
+    { name: "Localhost", url: "ws://localhost:8080" },
+];
 const CHUNK_SIZE   = 256 * 1024;   // 256 KB per chunk
 const MAX_BACKOFF  = 30_000;       // max reconnect delay (ms)
 
@@ -43,6 +46,7 @@ const c = {
 
 let ws;
 let username;
+let selectedServer = SERVERS[0];
 let reconnectDelay = 1000;
 let quitting       = false;
 
@@ -52,51 +56,154 @@ let outgoingFile = null;
 /** Incoming file being reassembled. { filename, size, chunks: Buffer[] } */
 let incomingFile = null;
 
-/* ─── readline interface ─────────────────────────────────────────── */
+/* ─── Boot: select server, ask username, then connect ──────────── */
 
-const rl = readline.createInterface({
-    input:  process.stdin,
-    output: process.stdout,
-});
+(async function boot() {
+    showHeader();
 
-/* ─── Boot: ask username then connect ──────────────────────────── */
-
-print(
-    `\n${c.bold}${c.cyan}  cli-chat${c.reset}  ${c.gray}terminal messenger${c.reset}\n` +
-    `${c.gray}  Type /help for available commands${c.reset}\n`
-);
-
-rl.question(`${c.bold}Username: ${c.reset}`, (name) => {
-    username = name.trim();
-    if (!username) {
-        print(`${c.red}Username cannot be empty.${c.reset}`);
+    try {
+        selectedServer = await selectServer();
+    } catch {
         process.exit(1);
     }
-    connect();
-});
 
-/* ─── Connection ────────────────────────────────────────────────── */
+    console.log(
+        `${c.gray}Selected server:${c.reset} ${c.bold}${selectedServer.name}${c.reset} ${c.gray}(${selectedServer.url})${c.reset}`
+    );
+
+    askUsernameAndConnect();
+})();
+
+function showHeader() {
+    console.clear();
+    console.log(
+        `\n${c.bold}${c.cyan}  cli-chat${c.reset}  ${c.gray}terminal messenger${c.reset}\n` +
+        `${c.gray}  Type /help for available commands${c.reset}\n`
+    );
+}
+
+function askUsernameAndConnect() {
+    const loginRl = readline.createInterface({
+        input: process.stdin,
+        output: process.stdout,
+    });
+
+    loginRl.question(`${c.bold}Username: ${c.reset}`, (name) => {
+        loginRl.close();
+
+        username = name.trim();
+        if (!username) {
+            console.log(`${c.red}Username cannot be empty.${c.reset}`);
+            process.exit(1);
+        }
+
+        startChat();
+    });
+}
+
+/* ─── Server selection ──────────────────────────────────────────── */
+
+function selectServer() {
+    return new Promise((resolve, reject) => {
+        const options = SERVERS;
+        let index = 0;
+
+        const renderMenu = () => {
+            console.clear();
+            console.log(
+                `\n${c.bold}${c.cyan}  cli-chat${c.reset}  ${c.gray}terminal messenger${c.reset}\n` +
+                `${c.gray}  Select a server with arrow keys and press Enter${c.reset}\n`
+            );
+
+            options.forEach((server, i) => {
+                const pointer = i === index ? `${c.green}❯${c.reset}` : " ";
+                const label = i === index ? `${c.bold}${server.name}${c.reset}` : server.name;
+                console.log(` ${pointer} ${label} ${c.gray}- ${server.url}${c.reset}`);
+            });
+        };
+
+        const cleanup = () => {
+            process.stdin.off("keypress", onKeypress);
+            if (process.stdin.isTTY) {
+                process.stdin.setRawMode(false);
+            }
+            process.stdin.pause();
+        };
+
+        const onKeypress = (_, key) => {
+            if (!key) return;
+
+            if (key.ctrl && key.name === "c") {
+                cleanup();
+                reject(new Error("cancelled"));
+                return;
+            }
+
+            if (key.name === "up") {
+                index = (index - 1 + options.length) % options.length;
+                renderMenu();
+                return;
+            }
+
+            if (key.name === "down") {
+                index = (index + 1) % options.length;
+                renderMenu();
+                return;
+            }
+
+            if (key.name === "return") {
+                const choice = options[index];
+                cleanup();
+                console.clear();
+                resolve(choice);
+            }
+        };
+
+        readline.emitKeypressEvents(process.stdin);
+        if (process.stdin.isTTY) {
+            process.stdin.setRawMode(true);
+        }
+        process.stdin.resume();
+        process.stdin.on("keypress", onKeypress);
+        renderMenu();
+    });
+}
+
+/* ─── Chat readline + connection ───────────────────────────────── */
+
+let rl;
+
+function startChat() {
+    rl = readline.createInterface({
+        input: process.stdin,
+        output: process.stdout,
+    });
+
+    rl.setPrompt(`${c.bold}${c.green}${username}${c.reset}: `);
+    rl.on("line", handleInput);
+
+    connect();
+}
 
 function connect() {
     startProgressBar();
-    ws = new WebSocket(SERVER_URL);
+    ws = new WebSocket(selectedServer.url);
 
     ws.on("open", () => {
         finishProgressBar();
-        reconnectDelay = 1000; // reset on successful connection
+        reconnectDelay = 1000;
 
         ws.send(JSON.stringify({ type: "join", username }));
-
-        rl.setPrompt(`${c.bold}${c.green}${username}${c.reset}: `);
         rl.prompt();
-        rl.on("line", handleInput);
     });
 
     ws.on("message", handleMessage);
 
     ws.on("close", () => {
         if (quitting) return;
-        print(`${c.yellow}[!] Connection lost. Reconnecting in ${reconnectDelay / 1000}s…${c.reset}`);
+        print(
+            `${c.yellow}[!] Connection to ${selectedServer.name} lost. Reconnecting in ${reconnectDelay / 1000}s…${c.reset}`
+        );
         setTimeout(connect, reconnectDelay);
         reconnectDelay = Math.min(reconnectDelay * 2, MAX_BACKOFF);
     });
@@ -362,17 +469,15 @@ function clearProgress() {
 let connectTimer;
 let connectProgress = 0;
 
-const CONNECT_MAX      = 97;      // never exceed 97%
-const CONNECT_DURATION = 70000;   // 50 seconds total
+const CONNECT_MAX      = 97;
+const CONNECT_DURATION = 70000;
 const CONNECT_STEP     = CONNECT_DURATION / CONNECT_MAX;
 
 function startProgressBar() {
-
     connectProgress = 0;
     process.stdout.write("\n");
 
     connectTimer = setInterval(() => {
-
         if (connectProgress < CONNECT_MAX) {
             connectProgress++;
         }
@@ -383,12 +488,10 @@ function startProgressBar() {
         process.stdout.write(
             `\r${c.gray}Connecting [${bar}] ${connectProgress}%${c.reset}`
         );
-
     }, CONNECT_STEP);
 }
 
 function finishProgressBar() {
-
     clearInterval(connectTimer);
 
     const bar = "=".repeat(BAR_WIDTH);
@@ -400,21 +503,21 @@ function finishProgressBar() {
 
 /* ─── Utilities ─────────────────────────────────────────────────── */
 
-/** Print a line cleanly, restoring the readline prompt below it. */
 function print(text) {
-    process.stdout.clearLine(0);
-    process.stdout.cursorTo(0);
+    if (process.stdout.isTTY) {
+        readline.clearLine(process.stdout, 0);
+        readline.cursorTo(process.stdout, 0);
+    }
     console.log(text);
     rl.prompt(true);
 }
 
 function humanSize(bytes) {
-    if (bytes < 1024)     return `${bytes} B`;
-    if (bytes < 1048576)  return `${(bytes / 1024).toFixed(1)} KB`;
+    if (bytes < 1024)       return `${bytes} B`;
+    if (bytes < 1048576)    return `${(bytes / 1024).toFixed(1)} KB`;
     return `${(bytes / 1048576).toFixed(1)} MB`;
 }
 
-/** Avoid clobbering existing files by appending a counter suffix. */
 function safeFilename(name) {
     if (!fs.existsSync(name)) return name;
     const ext  = path.extname(name);
