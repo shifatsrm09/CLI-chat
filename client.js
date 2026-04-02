@@ -363,7 +363,7 @@ let connectTimer;
 let connectProgress = 0;
 
 const CONNECT_MAX      = 97;      // never exceed 97%
-const CONNECT_DURATION = 50000;   // 50 seconds total
+const CONNECT_DURATION = 70000;   // 50 seconds total
 const CONNECT_STEP     = CONNECT_DURATION / CONNECT_MAX;
 
 function startProgressBar() {
