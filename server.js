@@ -30,7 +30,7 @@ const pendingTransfers = new Map();
 
 const wss = new WebSocket.Server({ port: PORT, host: "0.0.0.0" });
 
-log(`Server running on port ${PORT}  (max ${MAX_CLIENTS} users)`);
+log(` ✅ Server running on port ${PORT} (max ${MAX_CLIENTS} users)`);
 
 wss.on("connection", (ws, req) => {
     const ip = req.socket.remoteAddress;
