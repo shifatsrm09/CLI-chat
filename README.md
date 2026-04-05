@@ -7,8 +7,12 @@ The application runs entirely in the **command line** and allows users to exchan
 The server is hosted online, so users only need the client executable to start chatting.
 
 ---
+## Dev Commands
 
 
+``` 
+npm install && npm install ws && npm install -g pkg 
+```
 ## Windows Usage
 
 1. Download **`client.exe`** from the Releases page.
