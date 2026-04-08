@@ -5,6 +5,8 @@
 * Commands:
 *   /help               — show this list
 *   /list               — show online users
+*   /ls                 — list contents of the current directory
+*   /dir                — show current working directory
 *   /send <path>        — offer a file or folder to the room
 *   /w <user> <msg>     — private message
 *   /quit               — disconnect and exit
@@ -234,6 +236,8 @@ function handleInput(line) {
        print(
            `\n${c.bold}Commands:${c.reset}\n` +
            `  ${c.cyan}/list${c.reset}              — who is online\n` +
+           `  ${c.cyan}/ls${c.reset}                — list files/folders in current directory\n` +
+           `  ${c.cyan}/dir${c.reset}               — show current working directory\n` +
            `  ${c.cyan}/send <path>${c.reset}       — offer a file or folder to the room\n` +
            `  ${c.cyan}/w <user> <msg>${c.reset}    — private (whisper) message\n` +
            `  ${c.cyan}/quit${c.reset}              — disconnect and exit\n`
@@ -245,6 +249,18 @@ function handleInput(line) {
    /* /list */
    if (input === "/list") {
        ws.send(JSON.stringify({ type: "list" }));
+       return;
+   }
+
+   /* /ls */
+   if (input === "/ls") {
+       listCurrentDirectory();
+       return;
+   }
+
+   /* /dir */
+   if (input === "/dir") {
+       showCurrentDirectory();
        return;
    }
 
@@ -603,6 +619,43 @@ function humanSize(bytes) {
    return `${(bytes / 1048576).toFixed(1)} MB`;
 }
 
+function showCurrentDirectory() {
+   print(`${c.bold}Current directory:${c.reset} ${process.cwd()}`);
+}
+
+function listCurrentDirectory() {
+   try {
+       const cwd = process.cwd();
+       const entries = fs.readdirSync(cwd, { withFileTypes: true })
+           .sort((a, b) => {
+               if (a.isDirectory() && !b.isDirectory()) return -1;
+               if (!a.isDirectory() && b.isDirectory()) return 1;
+               return a.name.localeCompare(b.name);
+           });
+
+       if (entries.length === 0) {
+           print(`${c.gray}Current directory is empty: ${cwd}${c.reset}`);
+           return;
+       }
+
+       const lines = entries.map((entry) => {
+           const fullPath = path.join(cwd, entry.name);
+           const stat = fs.statSync(fullPath);
+           if (entry.isDirectory()) {
+               return `  ${c.blue}[DIR]${c.reset}  ${entry.name}`;
+           }
+           return `  ${c.green}[FILE]${c.reset} ${entry.name} ${c.gray}(${humanSize(stat.size)})${c.reset}`;
+       });
+
+       print(
+           `${c.bold}Current directory:${c.reset} ${cwd}\n` +
+           lines.join("\n")
+       );
+   } catch (err) {
+       print(`${c.red}Failed to list current directory: ${err.message}${c.reset}`);
+   }
+}
+
 function saveIncomingTransfer(meta, buffer) {
    if (meta.kind === "directory") {
        return restoreDirectoryArchive(meta, buffer);
@@ -663,4 +716,3 @@ function safeFilename(name) {
    while (fs.existsSync(`${base}(${i})${ext}`)) i++;
    return `${base}(${i})${ext}`;
 }
-
