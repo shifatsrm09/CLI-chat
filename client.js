@@ -29,6 +29,10 @@ const SERVERS = [
 ];
 const CHUNK_SIZE   = 256 * 1024;   // 256 KB per chunk
 const MAX_BACKOFF  = 30_000;       // max reconnect delay (ms)
+const CONNECT_MAX      = 97;
+const CONNECT_DURATION = 70000;
+const CONNECT_STEP     = CONNECT_DURATION / CONNECT_MAX;
+const CONNECT_GRACE_MS = 10_000;
 
 /* ─── ANSI colours (no dependencies) ───────────────────────────── */
 
@@ -52,6 +56,10 @@ let username;
 let selectedServer = SERVERS[0];
 let reconnectDelay = 1000;
 let quitting       = false;
+let rl;
+let connectTimer = null;
+let connectProgress = 0;
+let connectionAttempt = null;
 
 /** Outgoing transfer waiting for accept. { buffer, filename, kind, originalName } */
 let outgoingFile = null;
@@ -174,8 +182,6 @@ function selectServer() {
 
 /* ─── Chat readline + connection ───────────────────────────────── */
 
-let rl;
-
 function startChat() {
    rl = readline.createInterface({
        input: process.stdin,
@@ -185,7 +191,7 @@ function startChat() {
 
    rl.on("line", handleInput);
 
-   connect();
+   connect(false);
 }
 
 function promptInput(preserveCursor = false) {
@@ -193,32 +199,119 @@ function promptInput(preserveCursor = false) {
    rl.prompt(preserveCursor);
 }
 
-function connect() {
-   startProgressBar();
-   ws = new WebSocket(selectedServer.url);
+function connect(isReconnect = false) {
+   cleanupConnectionAttempt();
 
-   ws.on("open", () => {
+   const attempt = {
+       completed: false,
+       failed: false,
+       server: selectedServer,
+       socket: null,
+       graceTimer: null,
+       statusTimer: null,
+       retryTimer: null,
+       coldStart: false,
+       reconnect: isReconnect,
+   };
+   connectionAttempt = attempt;
+
+   startProgressBar();
+   tryConnectAttempt(attempt);
+}
+
+function tryConnectAttempt(attempt) {
+   if (connectionAttempt !== attempt || attempt.completed || attempt.failed || quitting) return;
+
+   const socket = new WebSocket(attempt.server.url);
+   attempt.socket = socket;
+   ws = socket;
+
+   socket.on("open", () => {
+       if (connectionAttempt !== attempt || attempt.completed || attempt.failed) return;
+       attempt.completed = true;
+       clearConnectionTimers(attempt);
        finishProgressBar();
        reconnectDelay = 1000;
 
-       ws.send(JSON.stringify({ type: "join", username }));
+       socket.send(JSON.stringify({ type: "join", username }));
        promptInput();
    });
 
-   ws.on("message", handleMessage);
+   socket.on("message", handleMessage);
 
-   ws.on("close", () => {
-       if (quitting) return;
-       print(
-           `${c.yellow}[!] Connection to ${selectedServer.name} lost. Reconnecting in ${reconnectDelay / 1000}s…${c.reset}`
-       );
-       setTimeout(connect, reconnectDelay);
-       reconnectDelay = Math.min(reconnectDelay * 2, MAX_BACKOFF);
+   socket.on("close", () => {
+       if (connectionAttempt !== attempt || attempt.completed || attempt.failed || quitting) return;
+       handleAttemptRetry(attempt);
    });
 
-   ws.on("error", () => {
-       // Errors are followed by 'close', handled above
+   socket.on("error", () => {
+       if (connectionAttempt !== attempt || attempt.completed || attempt.failed || quitting) return;
+       handleAttemptRetry(attempt);
    });
+}
+
+function handleAttemptRetry(attempt) {
+   if (attempt.completed || attempt.failed || connectionAttempt !== attempt) return;
+
+   if (!attempt.coldStart) {
+       startColdStartWait(attempt, attempt.reconnect);
+   }
+
+   if (attempt.retryTimer) return;
+
+   attempt.retryTimer = setTimeout(() => {
+       attempt.retryTimer = null;
+       if (connectionAttempt !== attempt || attempt.completed || attempt.failed || quitting) return;
+       tryConnectAttempt(attempt);
+   }, 1500);
+}
+
+function startColdStartWait(attempt, isReconnect) {
+   if (attempt.coldStart || attempt.completed || attempt.failed) return;
+   attempt.coldStart = true;
+
+   attempt.statusTimer = setTimeout(() => {
+       if (connectionAttempt !== attempt || attempt.completed || attempt.failed) return;
+       clearProgress();
+       console.log(`${c.yellow}Server unavailable, waiting for cold start...${c.reset}`);
+   }, 1200);
+
+   attempt.graceTimer = setTimeout(() => {
+       if (connectionAttempt !== attempt || attempt.completed || attempt.failed) return;
+       if (isReconnect) {
+           handleReconnectFailure(attempt.server.name);
+           return;
+       }
+       failInitialConnection(attempt, `Connection to ${attempt.server.name} failed.`);
+   }, CONNECT_DURATION + CONNECT_GRACE_MS);
+}
+
+function clearConnectionTimers(attempt) {
+   if (attempt?.graceTimer) {
+       clearTimeout(attempt.graceTimer);
+       attempt.graceTimer = null;
+   }
+   if (attempt?.statusTimer) {
+       clearTimeout(attempt.statusTimer);
+       attempt.statusTimer = null;
+   }
+   if (attempt?.retryTimer) {
+       clearTimeout(attempt.retryTimer);
+       attempt.retryTimer = null;
+   }
+}
+
+function cleanupConnectionAttempt() {
+   if (!connectionAttempt) return;
+   clearConnectionTimers(connectionAttempt);
+   if (connectionAttempt.socket) {
+       connectionAttempt.socket.removeAllListeners("open");
+       connectionAttempt.socket.removeAllListeners("message");
+       connectionAttempt.socket.removeAllListeners("close");
+       connectionAttempt.socket.removeAllListeners("error");
+       try { connectionAttempt.socket.close(); } catch {}
+   }
+   connectionAttempt = null;
 }
 
 /* ─── Input handler ─────────────────────────────────────────────── */
@@ -227,16 +320,14 @@ function handleInput(line) {
    const input = line.trim();
    if (!input) { promptInput(); return; }
 
-   /* /quit */
    if (input === "/quit" || input === "/exit") {
        quitting = true;
        print(`${c.gray}Goodbye.${c.reset}`);
-       ws.close();
+       if (ws) ws.close();
        rl.close();
        process.exit(0);
    }
 
-   /* /help */
    if (input === "/help") {
        print(
            `\n${c.bold}Commands:${c.reset}\n` +
@@ -251,33 +342,28 @@ function handleInput(line) {
        return;
    }
 
-   /* /list */
    if (input === "/list") {
        ws.send(JSON.stringify({ type: "list" }));
        promptInput();
        return;
    }
 
-   /* /ls */
    if (input === "/ls") {
        listCurrentDirectory();
        return;
    }
 
-   /* /dir */
    if (input === "/dir") {
        showCurrentDirectory();
        return;
    }
 
-   /* /send <path> */
    if (input.startsWith("/send ")) {
        const filepath = input.slice(6).trim();
        sendFile(filepath);
        return;
    }
 
-   /* /w <user> <message> */
    if (input.startsWith("/w ")) {
        const parts   = input.slice(3).trim().split(" ");
        const to      = parts.shift();
@@ -291,13 +377,11 @@ function handleInput(line) {
        return;
    }
 
-   /* Unknown command */
    if (input.startsWith("/")) {
        print(`${c.red}Unknown command. Type /help for help.${c.reset}`);
        return;
    }
 
-   /* Regular chat message */
    ws.send(JSON.stringify({ type: "message", from: username, content: input }));
    promptInput();
 }
@@ -313,7 +397,6 @@ function handleMessage(raw) {
    }
 
    switch (msg.type) {
-
        case "message":
            if (msg.from !== username) {
                print(`${c.bold}${c.blue}${msg.from}${c.reset}: ${msg.content}`);
@@ -385,7 +468,6 @@ function handleMessage(raw) {
            if (incomingFile) {
                const chunkBuf = Buffer.from(msg.data, "base64");
                incomingFile.chunks.push(chunkBuf);
-
                const received = incomingFile.chunks.reduce((s, b) => s + b.length, 0);
                drawProgress("Receiving", received, incomingFile.size);
            }
@@ -544,7 +626,6 @@ function transmitFile(buffer, filename) {
        offset += slice.length;
        seq++;
        drawProgress("Sending", offset, total);
-
        setImmediate(sendNext);
    }
 
@@ -569,16 +650,8 @@ function clearProgress() {
    process.stdout.write("\r" + " ".repeat(72) + "\r");
 }
 
-/* ─── Connection progress bar ───────────────────────────────────── */
-
-let connectTimer;
-let connectProgress = 0;
-
-const CONNECT_MAX      = 97;
-const CONNECT_DURATION = 70000;
-const CONNECT_STEP     = CONNECT_DURATION / CONNECT_MAX;
-
 function startProgressBar() {
+   stopProgressBar();
    connectProgress = 0;
    process.stdout.write("\n");
 
@@ -596,11 +669,16 @@ function startProgressBar() {
    }, CONNECT_STEP);
 }
 
+function stopProgressBar() {
+   if (connectTimer) {
+       clearInterval(connectTimer);
+       connectTimer = null;
+   }
+}
+
 function finishProgressBar() {
-   clearInterval(connectTimer);
-
+   stopProgressBar();
    const bar = "=".repeat(BAR_WIDTH);
-
    process.stdout.write(
        `\r${c.green}Connected  [${bar}] 100%${c.reset}\n\n`
    );
