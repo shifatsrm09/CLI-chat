@@ -180,12 +180,17 @@ function startChat() {
    rl = readline.createInterface({
        input: process.stdin,
        output: process.stdout,
+       prompt: `${c.bold}${c.green}${username}${c.reset}: `,
    });
 
-   rl.setPrompt(`${c.bold}${c.green}${username}${c.reset}: `);
    rl.on("line", handleInput);
 
    connect();
+}
+
+function promptInput(preserveCursor = false) {
+   if (!rl) return;
+   rl.prompt(preserveCursor);
 }
 
 function connect() {
@@ -197,7 +202,7 @@ function connect() {
        reconnectDelay = 1000;
 
        ws.send(JSON.stringify({ type: "join", username }));
-       rl.prompt();
+       promptInput();
    });
 
    ws.on("message", handleMessage);
@@ -220,7 +225,7 @@ function connect() {
 
 function handleInput(line) {
    const input = line.trim();
-   if (!input) { rl.prompt(); return; }
+   if (!input) { promptInput(); return; }
 
    /* /quit */
    if (input === "/quit" || input === "/exit") {
@@ -242,13 +247,14 @@ function handleInput(line) {
            `  ${c.cyan}/w <user> <msg>${c.reset}    — private (whisper) message\n` +
            `  ${c.cyan}/quit${c.reset}              — disconnect and exit\n`
        );
-       rl.prompt();
+       promptInput();
        return;
    }
 
    /* /list */
    if (input === "/list") {
        ws.send(JSON.stringify({ type: "list" }));
+       promptInput();
        return;
    }
 
@@ -278,22 +284,22 @@ function handleInput(line) {
        const content = parts.join(" ");
        if (!to || !content) {
            print(`${c.red}Usage: /w <username> <message>${c.reset}`);
-           rl.prompt();
            return;
        }
        ws.send(JSON.stringify({ type: "whisper", to, content }));
+       promptInput();
        return;
    }
 
    /* Unknown command */
    if (input.startsWith("/")) {
        print(`${c.red}Unknown command. Type /help for help.${c.reset}`);
-       rl.prompt();
        return;
    }
 
    /* Regular chat message */
    ws.send(JSON.stringify({ type: "message", from: username, content: input }));
+   promptInput();
 }
 
 /* ─── Incoming message handler ──────────────────────────────────── */
@@ -356,8 +362,8 @@ function handleMessage(raw) {
                        print(`${c.gray}Receiving ${label} ${shownName}…${c.reset}`);
                    } else {
                        ws.send(JSON.stringify({ type: "file-reject", from: msg.from }));
+                       promptInput();
                    }
-                   rl.prompt();
                }
            );
            break;
@@ -409,7 +415,7 @@ function handleMessage(raw) {
            break;
    }
 
-   rl.prompt(true);
+   promptInput(true);
 }
 
 /* ─── File/folder sending ───────────────────────────────────────── */
@@ -417,7 +423,6 @@ function handleMessage(raw) {
 function sendFile(filepath) {
    if (!fs.existsSync(filepath)) {
        print(`${c.red}Path not found: ${filepath}${c.reset}`);
-       rl.prompt();
        return;
    }
 
@@ -431,7 +436,6 @@ function sendFile(filepath) {
 
        if (!stat.isFile()) {
            print(`${c.red}Only regular files and folders can be sent.${c.reset}`);
-           rl.prompt();
            return;
        }
 
@@ -526,7 +530,7 @@ function transmitFile(buffer, filename) {
            ws.send(JSON.stringify({ type: "file-done", filename }));
            print(`${c.green}✓ File sent: ${filename}${c.reset}`);
            outgoingFile = null;
-           rl.prompt(true);
+           promptInput(true);
            return;
        }
 
@@ -610,7 +614,7 @@ function print(text) {
        readline.cursorTo(process.stdout, 0);
    }
    console.log(text);
-   rl.prompt(true);
+   promptInput(true);
 }
 
 function humanSize(bytes) {
