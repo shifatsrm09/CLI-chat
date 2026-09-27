@@ -30,7 +30,16 @@ const pendingTransfers = new Map();
 
 const wss = new WebSocket.Server({ port: PORT, host: "0.0.0.0" });
 
-log(` ✅ Server running on port ${PORT} (max ${MAX_CLIENTS} users)`);
+wss.on("listening", () => {
+   log(` ✅ Server running on port ${PORT} (max ${MAX_CLIENTS} users)`);
+});
+
+wss.on("error", (err) => {
+   console.error(err.code === "EADDRINUSE"
+       ? `Port ${PORT} is already in use. Set PORT to a free port in .env, then restart the server and client.`
+       : `Server error: ${err.message}`);
+   process.exit(1);
+});
 
 wss.on("connection", (ws, req) => {
    const ip = req.socket.remoteAddress;

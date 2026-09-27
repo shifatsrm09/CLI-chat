@@ -4,12 +4,11 @@
   "description": "CLI WebSocket chat client",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js",
-    "client": "node client.js",
+    "start": "node --env-file-if-exists=.env server.js",
+    "client": "node --env-file-if-exists=.env client.js",
     "build:win": "pkg client.js --targets node18-win-x64 --output client-win",
     "build:linux": "pkg client.js --targets node18-linux-x64 --output client && chmod +x client",
     "build": "npm run build:win && npm run build:linux"
-
   },
   "keywords": [],
   "author": "",

@@ -26,7 +26,7 @@ const SERVERS = [
    { name: "Render",     url: "wss://cli-chat-ic6w.onrender.com" },
    { name: "Mirpur",     url: "wss://unpurely-heptarchic-corine.ngrok-free.dev" },
    { name: "Gazipur",    url: "wss://unmensurable-shemika-unbronzed.ngrok-free.dev" },
-   { name: "Localhost",  url: "ws://localhost:8080" },
+   { name: "Localhost",  url: `ws://localhost:${process.env.PORT || 8080}` },
 ];
 const CHUNK_SIZE   = 256 * 1024;   // 256 KB per chunk
 const MAX_BACKOFF  = 30_000;       // max reconnect delay (ms)
