@@ -1,0 +1,25 @@
+{
+  "name": "chat-api",
+  "version": "1.0.0",
+  "description": "Zero-server, real-time room chat web application for chat.cfat.site",
+  "main": "worker/index.js",
+  "scripts": {
+    "start": "node dev-server.js",
+    "dev": "node dev-server.js",
+    "deploy:cf": "npx wrangler deploy",
+    "dev:cf": "npx wrangler dev"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/shifatsrm09/chat-api.git"
+  },
+  "keywords": ["chat", "websocket", "cloudflare-worker", "durable-objects", "vercel"],
+  "author": "CFAT",
+  "license": "MIT",
+  "dependencies": {
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "wrangler": "^3.100.0"
+  }
+}

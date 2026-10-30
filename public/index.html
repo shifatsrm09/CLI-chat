@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>CFAT Chat — Instant Zero-Server Rooms</title>
+  <link rel="stylesheet" href="style.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+</head>
+<body>
+  <!-- Toast Notification Container -->
+  <div id="toast-container" class="toast-container"></div>
+
+  <!-- SCREEN 1: LOBBY -->
+  <main id="lobby-screen" class="screen active">
+    <div class="lobby-card">
+      <div class="brand">
+        <div class="brand-icon">
+          <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
+          </svg>
+        </div>
+        <h1>chat.cfat.site</h1>
+        <p class="tagline">Instant, zero-friction room chat at the edge</p>
+      </div>
+
+      <div class="tabs">
+        <button id="tab-join" class="tab-btn active" onclick="switchTab('join')">Join Room</button>
+        <button id="tab-host" class="tab-btn" onclick="switchTab('host')">Host Room</button>
+      </div>
+
+      <!-- JOIN ROOM FORM -->
+      <form id="join-form" class="auth-form" onsubmit="handleJoin(event)">
+        <div class="input-group">
+          <label for="join-room">Room Code</label>
+          <input type="text" id="join-room" placeholder="e.g. CFAT-4821" required autocomplete="off" spellcheck="false" maxlength="24">
+        </div>
+        <div class="input-group">
+          <label for="join-user">Your Name</label>
+          <input type="text" id="join-user" placeholder="e.g. Alex" required autocomplete="name" maxlength="24">
+        </div>
+        <button type="submit" class="primary-btn">
+          <span>Enter Room</span>
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+        </button>
+      </form>
+
+      <!-- HOST ROOM FORM -->
+      <form id="host-form" class="auth-form hidden" onsubmit="handleHost(event)">
+        <div class="input-group">
+          <label for="host-room">Room Code (Auto or Custom)</label>
+          <div class="input-with-action">
+            <input type="text" id="host-room" placeholder="e.g. CFAT-4821" required autocomplete="off" spellcheck="false" maxlength="24">
+            <button type="button" class="icon-btn" onclick="generateNewRoomCode()" title="Generate Random Code">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"/></svg>
+            </button>
+          </div>
+        </div>
+        <div class="input-group">
+          <label for="host-user">Your Name</label>
+          <input type="text" id="host-user" placeholder="e.g. Alex (Host)" required autocomplete="name" maxlength="24">
+        </div>
+        <button type="submit" class="primary-btn">
+          <span>Create & Enter</span>
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+        </button>
+      </form>
+
+      <div class="lobby-footer">
+        <span>⚡ Powered by Cloudflare Edge & Durable Objects</span>
+      </div>
+    </div>
+  </main>
+
+  <!-- SCREEN 2: ACTIVE CHAT -->
+  <main id="chat-screen" class="screen">
+    <!-- Navbar -->
+    <header class="chat-header">
+      <div class="header-left">
+        <button class="leave-btn" onclick="leaveRoom()" title="Leave Room">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>
+        </button>
+        <div class="room-info">
+          <div class="room-title-row">
+            <span class="room-label">Room:</span>
+            <span id="active-room-code" class="room-code-tag">CFAT-XXXX</span>
+            <button class="copy-link-btn" onclick="copyInviteLink()" title="Copy Invite Link">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+              <span>Share</span>
+            </button>
+          </div>
+          <div class="connection-status">
+            <span id="status-dot" class="status-dot connected"></span>
+            <span id="status-text">Connected</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="header-right">
+        <button class="header-action-btn" id="sound-btn" onclick="toggleSound()" title="Toggle Sound">
+          <svg id="sound-icon-on" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"></path></svg>
+          <svg id="sound-icon-off" class="hidden" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon><line x1="23" y1="9" x2="17" y2="15"></line><line x1="17" y1="9" x2="23" y2="15"></line></svg>
+        </button>
+
+        <button class="header-action-btn user-count-btn" onclick="toggleParticipantsDrawer()" title="View Participants">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M23 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path></svg>
+          <span id="participant-count-badge">1</span>
+        </button>
+      </div>
+    </header>
+
+    <!-- Chat Messages Stream -->
+    <div id="messages-stream" class="messages-stream">
+      <!-- Dynamic messages injected here -->
+    </div>
+
+    <!-- Message Input Bar -->
+    <footer class="chat-footer">
+      <form class="message-form" onsubmit="handleSendMessage(event)">
+        <input 
+          type="text" 
+          id="chat-input" 
+          placeholder="Type a message..." 
+          autocomplete="off" 
+          maxlength="2000"
+          onkeydown="handleInputKeydown(event)"
+        />
+        <button type="submit" id="send-button" class="send-btn" title="Send (Enter)">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>
+        </button>
+      </form>
+    </footer>
+
+    <!-- Participants Drawer / Backdrop -->
+    <div id="drawer-backdrop" class="drawer-backdrop hidden" onclick="toggleParticipantsDrawer()"></div>
+    <aside id="participants-drawer" class="participants-drawer hidden">
+      <div class="drawer-header">
+        <h3>Participants (<span id="drawer-user-count">0</span>)</h3>
+        <button class="close-drawer-btn" onclick="toggleParticipantsDrawer()">✕</button>
+      </div>
+      <ul id="participants-list" class="participants-list">
+        <!-- Participant items injected here -->
+      </ul>
+    </aside>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>
