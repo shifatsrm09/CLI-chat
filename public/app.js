@@ -59,6 +59,7 @@ const AVATAR_PALETTE = [
 // Initialization
 document.addEventListener("DOMContentLoaded", async () => {
   updateSoundUI();
+  initMobileViewport();
 
   const savedUser = localStorage.getItem("cfat_username") || "";
   if (savedUser) {
@@ -142,6 +143,12 @@ function enterRoom(room, user) {
   elements.chatScreen.classList.add("active");
   elements.activeRoomCode.textContent = room;
   elements.messagesStream.innerHTML = "";
+
+  if (window.visualViewport) {
+    elements.chatScreen.style.height = `${window.visualViewport.height}px`;
+    elements.chatScreen.style.top = `${window.visualViewport.offsetTop}px`;
+  }
+
   elements.chatInput.focus();
 
   const newUrl = `${window.location.pathname}?room=${encodeURIComponent(room)}`;
@@ -335,9 +342,44 @@ function leaveRoom() {
     state.ws = null;
   }
 
+  if (elements.chatScreen) {
+    elements.chatScreen.style.height = "";
+    elements.chatScreen.style.top = "";
+  }
+
   window.history.replaceState({}, "", window.location.pathname);
   elements.chatScreen.classList.remove("active");
   elements.lobbyScreen.classList.add("active");
+}
+
+// Mobile Viewport Handler (Messenger-style fixed header, scrollable messages)
+function initMobileViewport() {
+  if (!window.visualViewport) return;
+
+  const handleViewportChange = () => {
+    if (!elements.chatScreen || !elements.chatScreen.classList.contains("active")) return;
+
+    const vv = window.visualViewport;
+    elements.chatScreen.style.height = `${vv.height}px`;
+    elements.chatScreen.style.top = `${vv.offsetTop}px`;
+
+    if (window.scrollY !== 0 || window.scrollX !== 0) {
+      window.scrollTo(0, 0);
+    }
+
+    scrollToBottom();
+  };
+
+  window.visualViewport.addEventListener("resize", handleViewportChange);
+  window.visualViewport.addEventListener("scroll", () => {
+    if (window.scrollY !== 0 || window.scrollX !== 0) {
+      window.scrollTo(0, 0);
+    }
+  });
+
+  elements.chatInput.addEventListener("focus", () => {
+    setTimeout(handleViewportChange, 120);
+  });
 }
 
 function copyInviteLink() {
