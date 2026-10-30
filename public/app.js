@@ -1,5 +1,5 @@
 /**
- * CFAT Chat - Instant Zero-Server Web Client
+ * CFAT Chat - Room Messaging Client
  * chat.cfat.site
  */
 
@@ -44,32 +44,36 @@ const elements = {
   toastContainer: document.getElementById("toast-container"),
 };
 
+// Curated architectural color palette for avatars (no random rainbow hues)
+const AVATAR_PALETTE = [
+  "#2563eb", // Cobalt
+  "#0f766e", // Deep Teal
+  "#b45309", // Amber
+  "#334155", // Slate Gray
+  "#047857", // Emerald
+  "#be123c", // Crimson
+  "#475569", // Cool Slate
+  "#0369a1", // Steel Blue
+];
+
 // Initialization
 document.addEventListener("DOMContentLoaded", async () => {
-  // Load saved sound preference
   updateSoundUI();
 
-  // Load saved username
   const savedUser = localStorage.getItem("cfat_username") || "";
   if (savedUser) {
     elements.joinUserInput.value = savedUser;
     elements.hostUserInput.value = savedUser;
   }
 
-  // Generate initial random room code for Host form
   elements.hostRoomInput.value = generateRoomCode();
 
-  // Parse URL query parameter: ?room=XYZ
   const urlParams = new URLSearchParams(window.location.search);
   const roomParam = urlParams.get("room");
   if (roomParam) {
     elements.joinRoomInput.value = roomParam.toUpperCase().trim();
     switchTab("join");
-    if (savedUser) {
-      elements.joinUserInput.focus();
-    } else {
-      elements.joinUserInput.focus();
-    }
+    elements.joinUserInput.focus();
   }
 
   // Fetch optional config from /api/config
@@ -116,7 +120,7 @@ function handleJoin(e) {
   e.preventDefault();
   const room = elements.joinRoomInput.value.trim().toUpperCase();
   const user = elements.joinUserInput.value.trim();
-  if (!room || !user) return showToast("Please enter room code and name");
+  if (!room || !user) return showToast("Enter room code and handle");
   enterRoom(room, user);
 }
 
@@ -124,7 +128,7 @@ function handleHost(e) {
   e.preventDefault();
   const room = elements.hostRoomInput.value.trim().toUpperCase();
   const user = elements.hostUserInput.value.trim();
-  if (!room || !user) return showToast("Please enter room code and name");
+  if (!room || !user) return showToast("Enter room code and handle");
   enterRoom(room, user);
 }
 
@@ -134,14 +138,12 @@ function enterRoom(room, user) {
   state.username = user;
   localStorage.setItem("cfat_username", user);
 
-  // Switch screens
   elements.lobbyScreen.classList.remove("active");
   elements.chatScreen.classList.add("active");
   elements.activeRoomCode.textContent = room;
   elements.messagesStream.innerHTML = "";
   elements.chatInput.focus();
 
-  // Update browser URL without reload
   const newUrl = `${window.location.pathname}?room=${encodeURIComponent(room)}`;
   window.history.replaceState({ room }, "", newUrl);
 
@@ -151,7 +153,6 @@ function enterRoom(room, user) {
 function connectWebSocket() {
   setStatus("connecting", "Connecting...");
 
-  // Determine WebSocket target URL
   let targetWs = state.wsUrl;
   if (!targetWs) {
     const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
@@ -163,7 +164,7 @@ function connectWebSocket() {
   try {
     state.ws = new WebSocket(endpoint);
   } catch (err) {
-    console.error("WS instantiation failed:", err);
+    console.error("WebSocket failed:", err);
     setStatus("offline", "Connection Failed");
     return;
   }
@@ -182,8 +183,8 @@ function connectWebSocket() {
     }
   };
 
-  state.ws.onclose = (event) => {
-    if (!state.room) return; // User voluntarily left
+  state.ws.onclose = () => {
+    if (!state.room) return;
     setStatus("offline", "Disconnected");
     if (state.reconnectAttempts < state.maxReconnectAttempts) {
       state.reconnectAttempts++;
@@ -243,7 +244,7 @@ function renderChatMessage(sender, text, timestamp) {
     <div class="msg-bubble-wrap">
       <div class="msg-meta">
         <span>${escapeHTML(sender)}</span>
-        <span>•</span>
+        <span>·</span>
         <span>${timeStr}</span>
       </div>
       <div class="msg-bubble">${escapeHTML(text)}</div>
@@ -295,9 +296,9 @@ function updateParticipants(users) {
       const initial = u.charAt(0).toUpperCase();
       const color = getAvatarColor(u);
       return `
-        <li class="participant-item">
-          <div class="msg-avatar" style="background: ${color}; width: 26px; height: 26px; font-size: 0.72rem;">${initial}</div>
-          <div class="participant-name-wrap">
+        <li class="member-item">
+          <div class="msg-avatar" style="background: ${color}">${initial}</div>
+          <div class="member-meta">
             <span>${escapeHTML(u)}</span>
             ${isSelf ? '<span class="you-tag">You</span>' : ""}
           </div>
@@ -320,7 +321,10 @@ function toggleParticipantsDrawer() {
 
 // STATUS & UTILS
 function setStatus(type, label) {
-  elements.statusDot.className = `status-dot ${type}`;
+  let indicatorCls = "status-indicator";
+  if (type === "connected") indicatorCls += " live";
+  else if (type === "connecting") indicatorCls += " pending";
+  elements.statusDot.className = indicatorCls;
   elements.statusText.textContent = label;
 }
 
@@ -331,9 +335,7 @@ function leaveRoom() {
     state.ws = null;
   }
 
-  // Remove room query from URL
   window.history.replaceState({}, "", window.location.pathname);
-
   elements.chatScreen.classList.remove("active");
   elements.lobbyScreen.classList.add("active");
 }
@@ -341,9 +343,9 @@ function leaveRoom() {
 function copyInviteLink() {
   const url = `${window.location.origin}${window.location.pathname}?room=${encodeURIComponent(state.room)}`;
   navigator.clipboard.writeText(url).then(() => {
-    showToast("Invite link copied to clipboard!");
+    showToast("Invite link copied");
   }).catch(() => {
-    prompt("Copy invite link:", url);
+    prompt("Copy link:", url);
   });
 }
 
@@ -352,15 +354,15 @@ function showToast(msg) {
   toast.className = "toast";
   toast.textContent = msg;
   elements.toastContainer.appendChild(toast);
-  setTimeout(() => toast.remove(), 2500);
+  setTimeout(() => toast.remove(), 2400);
 }
 
-// SOUND EFFECTS (Web Audio API Synthesizer - Zero External Assets)
+// SOUND EFFECTS (Web Audio API Synthesizer - Clean clicks/tones)
 function toggleSound() {
   state.soundEnabled = !state.soundEnabled;
   localStorage.setItem("cfat_sound", state.soundEnabled);
   updateSoundUI();
-  showToast(state.soundEnabled ? "Sound enabled" : "Sound muted");
+  showToast(state.soundEnabled ? "Audio alerts on" : "Audio muted");
 }
 
 function updateSoundUI() {
@@ -390,19 +392,19 @@ function playChime(kind = "msg") {
 
     const now = state.audioCtx.currentTime;
     if (kind === "msg") {
-      osc.frequency.setValueAtTime(587.33, now); // D5
-      osc.frequency.exponentialRampToValueAtTime(880, now + 0.12); // A5
-      gain.gain.setValueAtTime(0.12, now);
-      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.3);
+      osc.frequency.setValueAtTime(520, now);
+      osc.frequency.exponentialRampToValueAtTime(780, now + 0.08);
+      gain.gain.setValueAtTime(0.06, now);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.18);
       osc.start(now);
-      osc.stop(now + 0.3);
+      osc.stop(now + 0.18);
     } else if (kind === "join") {
-      osc.frequency.setValueAtTime(440, now); // A4
-      osc.frequency.exponentialRampToValueAtTime(659.25, now + 0.1); // E5
-      gain.gain.setValueAtTime(0.08, now);
-      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.25);
+      osc.frequency.setValueAtTime(440, now);
+      osc.frequency.exponentialRampToValueAtTime(550, now + 0.08);
+      gain.gain.setValueAtTime(0.05, now);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.18);
       osc.start(now);
-      osc.stop(now + 0.25);
+      osc.stop(now + 0.18);
     }
   } catch (_) {}
 }
@@ -410,10 +412,10 @@ function playChime(kind = "msg") {
 function getAvatarColor(name) {
   let hash = 0;
   for (let i = 0; i < name.length; i++) {
-    hash = name.charCodeAt(i) + ((hash << 5) - hash);
+    hash = (hash << 5) - hash + name.charCodeAt(i);
+    hash |= 0;
   }
-  const hue = Math.abs(hash % 360);
-  return `hsl(${hue}, 65%, 48%)`;
+  return AVATAR_PALETTE[Math.abs(hash) % AVATAR_PALETTE.length];
 }
 
 function formatTime(ts) {
