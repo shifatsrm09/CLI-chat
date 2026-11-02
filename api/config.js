@@ -12,6 +12,13 @@ export default function handler(req, res) {
     status: "ok",
     service: "chat.cfat.site",
     wsUrl: wsUrl,
+    poker: {
+      enabled: true,
+      wsUrl: wsUrl || "wss://chat-api.cfat-api.workers.dev/ws",
+      maxPlayers: 8,
+      defaultBuyIn: 1000,
+      defaultBlinds: [10, 20],
+    },
     timestamp: new Date().toISOString(),
   });
 }

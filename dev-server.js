@@ -49,6 +49,23 @@ const server = http.createServer((req, res) => {
     return;
   }
 
+  // API Poker Config endpoint
+  if (url.pathname === "/api/poker" || url.pathname === "/api/poker-config") {
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(
+      JSON.stringify({
+        status: "ok",
+        service: "CFAT Poker API (Local Dev)",
+        wsUrl: `ws://${req.headers.host}/ws`,
+        maxPlayers: 8,
+        defaultBuyIn: 1000,
+        defaultBlinds: [10, 20],
+        timestamp: new Date().toISOString(),
+      })
+    );
+    return;
+  }
+
   // Static file serving
   let filePath = path.join(PUBLIC_DIR, url.pathname === "/" ? "index.html" : url.pathname);
   if (!fs.existsSync(filePath) || fs.statSync(filePath).isDirectory()) {
@@ -135,6 +152,17 @@ wss.on("connection", (ws, request) => {
           message: text,
           timestamp: Date.now(),
         });
+      } else if (data.type === "poker" || data.type === "game") {
+        const msg = {
+          ...data,
+          fromUser: username,
+          timestamp: Date.now(),
+        };
+        if (data.targetUser) {
+          sendToUser(room, data.targetUser, msg);
+        } else {
+          broadcast(room, msg, data.excludeSelf ? ws : null);
+        }
       } else if (data.type === "ping") {
         ws.send(JSON.stringify({ type: "pong", timestamp: Date.now() }));
       }
@@ -161,6 +189,20 @@ wss.on("connection", (ws, request) => {
   ws.on("close", cleanup);
   ws.on("error", cleanup);
 });
+
+function sendToUser(roomName, targetUsername, dataObj) {
+  const roomSet = rooms.get(roomName);
+  if (!roomSet || !targetUsername) return;
+  const targetClean = String(targetUsername).trim().toLowerCase();
+  const serialized = JSON.stringify(dataObj);
+  for (const client of roomSet) {
+    if (client.username && client.username.toLowerCase() === targetClean && client.ws.readyState === 1) {
+      try {
+        client.ws.send(serialized);
+      } catch (_) {}
+    }
+  }
+}
 
 function broadcast(roomName, dataObj, excludeWs = null) {
   const roomSet = rooms.get(roomName);

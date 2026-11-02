@@ -31,14 +31,35 @@ export default {
       return roomObject.fetch(request);
     }
 
-    // 2. Health check endpoint
+    // 2. Health check and Poker config endpoints
     if (url.pathname === "/api/health" || url.pathname === "/health") {
       return new Response(
         JSON.stringify({
           status: "healthy",
           engine: "Cloudflare Durable Objects",
-          version: "1.0.0",
+          version: "1.1.0",
+          features: ["chat", "poker", "targeted-messaging"],
           time: new Date().toISOString(),
+        }),
+        {
+          headers: {
+            "Content-Type": "application/json",
+            "Access-Control-Allow-Origin": "*",
+          },
+        }
+      );
+    }
+
+    if (url.pathname === "/api/poker" || url.pathname === "/api/poker-config") {
+      return new Response(
+        JSON.stringify({
+          status: "ok",
+          service: "CFAT Poker API",
+          wsUrl: `wss://${url.host}/ws`,
+          maxPlayers: 8,
+          defaultBuyIn: 1000,
+          defaultBlinds: [10, 20],
+          timestamp: new Date().toISOString(),
         }),
         {
           headers: {
@@ -134,6 +155,21 @@ export class ChatRoom {
           };
 
           this.broadcast(broadcastMsg);
+        } else if (payload.type === "poker" || payload.type === "game") {
+          // Real-time Poker game action or state sync
+          const msg = {
+            ...payload,
+            fromUser: username,
+            timestamp: Date.now(),
+          };
+
+          // If targeted to a specific user (e.g. private hole cards dealt to that player)
+          if (payload.targetUser) {
+            this.sendToUser(payload.targetUser, msg);
+          } else {
+            // Table broadcast to all seated players & spectators
+            this.broadcast(msg, payload.excludeSelf ? ws : null);
+          }
         } else if (payload.type === "ping") {
           ws.send(JSON.stringify({ type: "pong", timestamp: Date.now() }));
         }
@@ -155,6 +191,21 @@ export class ChatRoom {
 
     ws.addEventListener("close", cleanup);
     ws.addEventListener("error", cleanup);
+  }
+
+  sendToUser(targetUsername, messageObj) {
+    if (!targetUsername) return;
+    const targetClean = String(targetUsername).trim().toLowerCase();
+    const serialized = JSON.stringify(messageObj);
+    for (const [ws, info] of this.sessions.entries()) {
+      if (info && info.username && info.username.toLowerCase() === targetClean) {
+        try {
+          ws.send(serialized);
+        } catch (_) {
+          this.sessions.delete(ws);
+        }
+      }
+    }
   }
 
   broadcast(messageObj, excludeWs = null) {
