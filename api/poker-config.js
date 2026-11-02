@@ -12,7 +12,7 @@ export default function handler(req, res) {
     return;
   }
 
-  const wsUrl = process.env.NEXT_PUBLIC_WS_URL || process.env.WS_URL || "wss://chat-api.cfat-api.workers.dev/ws";
+  const wsUrl = process.env.NEXT_PUBLIC_WS_URL || process.env.WS_URL || "wss://api.cfat.site/ws";
 
   res.status(200).json({
     status: "ok",
