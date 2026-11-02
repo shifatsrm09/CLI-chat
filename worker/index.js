@@ -171,7 +171,7 @@ export default {
         createRoom: "POST https://api.cfat.site/api/rooms/create?game=poker",
         roomInfo: "GET https://api.cfat.site/api/rooms/info?room=POKER-1001",
       },
-      documentation: "https://github.com/shifatsrm09/chat-api",
+      documentation: "https://github.com/shifatsrm09/api-cfat-site",
       timestamp: new Date().toISOString(),
     });
   },

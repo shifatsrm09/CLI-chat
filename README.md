@@ -29,7 +29,7 @@
 ## 🛠️ Project Structure
 
 ```
-chat-api/
+api-cfat-site/
 ├── public/                 # Static Web Portal & Room Client
 │   ├── index.html          # Clean responsive lobby & developer console
 │   ├── style.css           # Modern dark-mode aesthetic
@@ -40,7 +40,7 @@ chat-api/
 │   ├── config.js           # Vercel serverless platform config
 │   └── poker-config.js     # Poker-specific coordinator configuration
 ├── dev-server.js           # Full local HTTP + WebSocket parity server
-├── wrangler.jsonc          # Cloudflare Worker configuration
+├── wrangler.jsonc          # Cloudflare Worker configuration ("name": "api")
 └── vercel.json             # Vercel deployment configuration
 ```
 
@@ -65,20 +65,25 @@ Try the REST endpoints:
 
 ---
 
-## ☁️ 2. Deploying to Cloudflare Worker (`api.cfat.site`)
+## ☁️ 2. Deploying to Cloudflare Worker (`api.cfat-api.workers.dev`)
 
 1. **Deploy the Worker**:
    ```bash
    npx wrangler deploy
    ```
-2. In Cloudflare Dashboard, bind your custom domain **`api.cfat.site`** under:
+2. Your live worker subdomain will be:
+   ```
+   https://api.cfat-api.workers.dev
+   wss://api.cfat-api.workers.dev/ws
+   ```
+3. In Cloudflare Dashboard, bind your custom domain **`api.cfat.site`** under:
    **Worker Settings -> Domains & Routes -> Custom Domains**.
 
 ---
 
 ## ▲ 3. Deploying to Vercel
 
-1. Import the GitHub repository in Vercel.
+1. Import the GitHub repository **`shifatsrm09/api-cfat-site`** in Vercel.
 2. In Vercel Project Settings -> **Domains**, bind **`api.cfat.site`**.
 3. Environment Variables (optional override):
-   - `NEXT_PUBLIC_WS_URL`: `wss://api.cfat.site/ws`
+   - `NEXT_PUBLIC_WS_URL`: `wss://api.cfat-api.workers.dev/ws`

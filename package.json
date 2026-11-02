@@ -1,5 +1,5 @@
 {
-  "name": "cfat-api",
+  "name": "api-cfat-site",
   "version": "2.0.0",
   "description": "Scalable real-time Edge WebSocket coordinator & multiplayer gaming hub for api.cfat.site",
   "main": "worker/index.js",
@@ -11,9 +11,17 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/shifatsrm09/chat-api.git"
+    "url": "git+https://github.com/shifatsrm09/api-cfat-site.git"
   },
-  "keywords": ["chat", "websocket", "cloudflare-worker", "durable-objects", "vercel"],
+  "keywords": [
+    "multiplayer",
+    "poker",
+    "websocket",
+    "cloudflare-worker",
+    "durable-objects",
+    "api-cfat-site",
+    "vercel"
+  ],
   "author": "CFAT",
   "license": "MIT",
   "dependencies": {
