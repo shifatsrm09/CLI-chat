@@ -65,7 +65,7 @@ Try the REST endpoints:
 
 ---
 
-## ☁️ 2. Deploying to Cloudflare Worker (`api.cfat-api.workers.dev`)
+## ☁️ 2. Deploying to Cloudflare Worker (`api.cfat.workers.dev`)
 
 1. **Deploy the Worker**:
    ```bash
@@ -73,8 +73,8 @@ Try the REST endpoints:
    ```
 2. Your live worker subdomain will be:
    ```
-   https://api.cfat-api.workers.dev
-   wss://api.cfat-api.workers.dev/ws
+   https://api.cfat.workers.dev
+   wss://api.cfat.workers.dev/ws
    ```
 3. In Cloudflare Dashboard, bind your custom domain **`api.cfat.site`** under:
    **Worker Settings -> Domains & Routes -> Custom Domains**.
@@ -86,4 +86,4 @@ Try the REST endpoints:
 1. Import the GitHub repository **`shifatsrm09/api-cfat-site`** in Vercel.
 2. In Vercel Project Settings -> **Domains**, bind **`api.cfat.site`**.
 3. Environment Variables (optional override):
-   - `NEXT_PUBLIC_WS_URL`: `wss://api.cfat-api.workers.dev/ws`
+   - `NEXT_PUBLIC_WS_URL`: `wss://api.cfat.workers.dev/ws`
