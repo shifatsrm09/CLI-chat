@@ -1,149 +1,355 @@
 /**
- * Cloudflare Worker with Durable Objects for Room-based Real-time Chat
- * Zero-server, 0ms cold start, free tier enabled.
+ * CFAT Real-Time Engine (api.cfat.site)
+ * Scalable Edge WebSocket Coordinator & Room Relay powered by Cloudflare Durable Objects.
+ * Designed for zero-server, 0ms cold-start multiplayer gaming (Poker, etc.) & live chat.
  */
+
+const CORS_HEADERS = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+  "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Requested-With",
+  "Access-Control-Max-Age": "86400",
+};
 
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
 
-    // Enable CORS for web clients connecting from chat.cfat.site
+    // 1. Universal CORS Preflight
     if (request.method === "OPTIONS") {
-      return new Response(null, {
-        headers: {
-          "Access-Control-Allow-Origin": "*",
-          "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-          "Access-Control-Allow-Headers": "*",
-        },
-      });
+      return new Response(null, { headers: CORS_HEADERS });
     }
 
-    // 1. WebSocket endpoint: /ws?room=CODE&user=NAME
+    // 2. Real-time WebSocket Gateway: /ws?room=CODE&user=NAME&game=GAME&role=ROLE
     if (url.pathname === "/ws") {
       if (request.headers.get("Upgrade") !== "websocket") {
-        return new Response("Expected WebSocket connection", { status: 426 });
+        return new Response(
+          JSON.stringify({ error: "Expected WebSocket Upgrade connection", code: 426 }),
+          { status: 426, headers: { ...CORS_HEADERS, "Content-Type": "application/json" } }
+        );
       }
 
-      const roomName = (url.searchParams.get("room") || "DEFAULT").toUpperCase().trim();
+      const rawRoom = url.searchParams.get("room") || "LOBBY-1";
+      const roomName = rawRoom.toUpperCase().trim().slice(0, 32);
+
+      // Route to room's isolated Durable Object instance
       const id = env.CHAT_ROOM.idFromName(roomName);
       const roomObject = env.CHAT_ROOM.get(id);
 
       return roomObject.fetch(request);
     }
 
-    // 2. Health check and Poker config endpoints
+    // 3. Health check API
     if (url.pathname === "/api/health" || url.pathname === "/health") {
-      return new Response(
-        JSON.stringify({
-          status: "healthy",
-          engine: "Cloudflare Durable Objects",
-          version: "1.1.0",
-          features: ["chat", "poker", "targeted-messaging"],
-          time: new Date().toISOString(),
-        }),
-        {
-          headers: {
-            "Content-Type": "application/json",
-            "Access-Control-Allow-Origin": "*",
-          },
-        }
-      );
+      return jsonResponse({
+        status: "healthy",
+        service: "api.cfat.site",
+        engine: "Cloudflare Durable Objects",
+        version: "2.0.0",
+        features: [
+          "edge-websockets",
+          "durable-objects",
+          "targeted-messaging",
+          "rate-limiting",
+          "multi-game-coordination",
+          "poker-engine-v2",
+          "presence-sync"
+        ],
+        timestamp: new Date().toISOString(),
+      });
     }
 
+    // 4. Central Platform Config API
+    if (url.pathname === "/api/config") {
+      const isHttps = url.protocol === "https:";
+      const host = url.host;
+      const wsProtocol = isHttps ? "wss:" : "ws:";
+
+      return jsonResponse({
+        status: "ok",
+        service: "api.cfat.site (CFAT Edge API)",
+        version: "2.0.0",
+        domain: "api.cfat.site",
+        wsUrl: `${wsProtocol}//${host}/ws`,
+        supportedGames: ["poker", "chat"],
+        maxRoomPlayers: 16,
+        timestamp: new Date().toISOString(),
+      });
+    }
+
+    // 5. Supported Games Catalog API
+    if (url.pathname === "/api/games") {
+      return jsonResponse({
+        status: "ok",
+        games: [
+          {
+            id: "poker",
+            name: "Texas Hold'em Poker",
+            maxPlayers: 8,
+            roomPrefix: "POKER-",
+            defaultBuyIn: 1000,
+            defaultBlinds: [10, 20],
+            turnTimerSeconds: 25,
+            features: ["private-hole-cards", "side-pots", "ai-bots", "reactions"],
+          },
+          {
+            id: "chat",
+            name: "Real-Time Room Chat",
+            maxPlayers: 100,
+            roomPrefix: "CHAT-",
+            features: ["text-messages", "presence", "audio-chimes"],
+          },
+        ],
+        timestamp: new Date().toISOString(),
+      });
+    }
+
+    // 6. Poker Specific Configuration API
     if (url.pathname === "/api/poker" || url.pathname === "/api/poker-config") {
-      return new Response(
-        JSON.stringify({
-          status: "ok",
-          service: "CFAT Poker API",
-          wsUrl: `wss://${url.host}/ws`,
-          maxPlayers: 8,
-          defaultBuyIn: 1000,
-          defaultBlinds: [10, 20],
-          timestamp: new Date().toISOString(),
-        }),
-        {
-          headers: {
-            "Content-Type": "application/json",
-            "Access-Control-Allow-Origin": "*",
-          },
-        }
-      );
+      const wsProtocol = url.protocol === "https:" ? "wss:" : "ws:";
+      return jsonResponse({
+        status: "ok",
+        game: "poker",
+        name: "CFAT Texas Hold'em",
+        wsUrl: `${wsProtocol}//${url.host}/ws`,
+        maxPlayers: 8,
+        defaultBuyIn: 1000,
+        defaultBlinds: [10, 20],
+        turnTimeSeconds: 25,
+        allowedPresets: [
+          { name: "Micro Stakes", buyIn: 500, blinds: [5, 10] },
+          { name: "Standard Stakes", buyIn: 1000, blinds: [10, 20] },
+          { name: "High Stakes", buyIn: 5000, blinds: [50, 100] },
+        ],
+        timestamp: new Date().toISOString(),
+      });
     }
 
-    return new Response(
-      "chat.cfat.site WebSocket Engine Active. Connect via WebSocket to /ws?room=ROOM_CODE&user=USERNAME",
-      {
-        status: 200,
-        headers: { "Content-Type": "text/plain", "Access-Control-Allow-Origin": "*" },
+    // 7. Create Room Code Generator API
+    if (url.pathname === "/api/rooms/create" && (request.method === "POST" || request.method === "GET")) {
+      const gameType = (url.searchParams.get("game") || "POKER").toUpperCase();
+      const prefix = gameType === "CHAT" ? "CHAT" : "POKER";
+      const randomNum = Math.floor(1000 + Math.random() * 9000);
+      const roomCode = `${prefix}-${randomNum}`;
+      const wsProtocol = url.protocol === "https:" ? "wss:" : "ws:";
+
+      return jsonResponse({
+        status: "ok",
+        room: roomCode,
+        game: gameType.toLowerCase(),
+        wsUrl: `${wsProtocol}//${url.host}/ws?room=${roomCode}`,
+        createdAt: new Date().toISOString(),
+      });
+    }
+
+    // 8. Room Info Query API (Inspects participants without joining)
+    if (url.pathname === "/api/rooms/info") {
+      const roomName = (url.searchParams.get("room") || "").toUpperCase().trim();
+      if (!roomName) {
+        return jsonResponse({ error: "Missing 'room' query parameter" }, 400);
       }
-    );
+      const id = env.CHAT_ROOM.idFromName(roomName);
+      const roomObject = env.CHAT_ROOM.get(id);
+
+      // Forward request to Durable Object internal query
+      const internalReq = new Request(new URL("/internal/info", request.url));
+      return roomObject.fetch(internalReq);
+    }
+
+    // Default Landing Response: API Overview
+    return jsonResponse({
+      service: "api.cfat.site",
+      description: "CFAT High-Performance Edge Real-Time Engine & Multiplayer Gaming Hub",
+      version: "2.0.0",
+      status: "online",
+      endpoints: {
+        websocket: "wss://api.cfat.site/ws?room=ROOM_CODE&user=USERNAME&game=GAME",
+        health: "https://api.cfat.site/api/health",
+        config: "https://api.cfat.site/api/config",
+        games: "https://api.cfat.site/api/games",
+        pokerConfig: "https://api.cfat.site/api/poker-config",
+        createRoom: "POST https://api.cfat.site/api/rooms/create?game=poker",
+        roomInfo: "GET https://api.cfat.site/api/rooms/info?room=POKER-1001",
+      },
+      documentation: "https://github.com/shifatsrm09/chat-api",
+      timestamp: new Date().toISOString(),
+    });
   },
 };
 
+function jsonResponse(data, status = 200) {
+  return new Response(JSON.stringify(data, null, 2), {
+    status,
+    headers: {
+      ...CORS_HEADERS,
+      "Content-Type": "application/json; charset=utf-8",
+    },
+  });
+}
+
 /**
- * ChatRoom Durable Object: Coordinates real-time messages and state for a single room.
+ * ChatRoom Durable Object
+ * Authoritative edge coordinator managing WebSocket sessions, targeted card routing,
+ * flood control, and presence synchronization for a single room.
  */
 export class ChatRoom {
   constructor(state, env) {
     this.state = state;
     this.env = env;
     this.storage = state.storage;
-    // Map of active WebSocket -> { username: string, joinedAt: number }
+
+    // Active sessions: Map<WebSocket, { id: string, username: string, game: string, role: string, joinedAt: number, msgCount: number, windowStart: number }>
     this.sessions = new Map();
+    this.roomMetadata = {
+      createdAt: Date.now(),
+      game: "general",
+      host: null,
+    };
   }
 
   async fetch(request) {
     const url = new URL(request.url);
-    const username = (url.searchParams.get("user") || "Guest").trim().slice(0, 32);
-    const room = (url.searchParams.get("room") || "DEFAULT").toUpperCase().trim();
+
+    // Internal Room Info Query from Worker fetch
+    if (url.pathname === "/internal/info") {
+      const activeUsers = Array.from(this.sessions.values()).map((s) => ({
+        username: s.username,
+        role: s.role,
+        joinedAt: s.joinedAt,
+      }));
+
+      return jsonResponse({
+        status: "ok",
+        room: url.searchParams.get("room"),
+        userCount: this.sessions.size,
+        users: activeUsers,
+        game: this.roomMetadata.game,
+        createdAt: this.roomMetadata.createdAt,
+      });
+    }
+
+    // WebSocket Upgrade Request
+    const rawUser = (url.searchParams.get("user") || "Guest").trim();
+    const username = sanitizeUsername(rawUser);
+    const room = (url.searchParams.get("room") || "LOBBY").toUpperCase().trim().slice(0, 32);
+    const game = (url.searchParams.get("game") || (room.startsWith("POKER-") ? "poker" : "chat")).toLowerCase();
+    const role = (url.searchParams.get("role") || "player").toLowerCase();
 
     const pair = new WebSocketPair();
     const [clientWs, serverWs] = Object.values(pair);
 
-    await this.handleSession(serverWs, username, room);
+    await this.handleSession(serverWs, { username, room, game, role });
 
     return new Response(null, {
       status: 101,
       webSocket: clientWs,
-      headers: { "Access-Control-Allow-Origin": "*" },
+      headers: CORS_HEADERS,
     });
   }
 
-  async handleSession(ws, username, room) {
+  async handleSession(ws, { username, room, game, role }) {
     ws.accept();
-    this.sessions.set(ws, { username, joinedAt: Date.now() });
 
-    // Retrieve active participants in room
+    const sessionId = crypto.randomUUID();
+    const now = Date.now();
+
+    // Check if user is already connected in this room; cleanly prune old session
+    for (const [oldWs, oldInfo] of this.sessions.entries()) {
+      if (oldInfo.username.toLowerCase() === username.toLowerCase()) {
+        try {
+          oldWs.send(
+            JSON.stringify({
+              type: "system_notice",
+              message: "Connected from another session/tab. Closing duplicate session.",
+            })
+          );
+          oldWs.close(1000, "Reconnected elsewhere");
+        } catch (_) {}
+        this.sessions.delete(oldWs);
+      }
+    }
+
+    // Register new session
+    const sessionInfo = {
+      id: sessionId,
+      username,
+      room,
+      game,
+      role,
+      joinedAt: now,
+      lastSeen: now,
+      msgCount: 0,
+      windowStart: now,
+    };
+    this.sessions.set(ws, sessionInfo);
+
+    // First player becomes initial room host candidate
+    if (!this.roomMetadata.host || this.sessions.size === 1) {
+      this.roomMetadata.host = username;
+      this.roomMetadata.game = game;
+    }
+
     const currentUsers = Array.from(this.sessions.values()).map((s) => s.username);
 
-    // Send room welcome & state directly to newly joined user
-    ws.send(
-      JSON.stringify({
-        type: "room_state",
-        room,
-        user: username,
-        users: currentUsers,
-        timestamp: Date.now(),
-      })
-    );
+    // 1. Send Room State to joined client
+    this.sendJson(ws, {
+      type: "room_state",
+      room,
+      user: username,
+      users: currentUsers,
+      game,
+      role,
+      host: this.roomMetadata.host,
+      timestamp: now,
+    });
 
-    // Notify other users in the room
+    // 2. Broadcast user_joined to other participants
     this.broadcast(
       {
         type: "user_joined",
         user: username,
         users: currentUsers,
-        timestamp: Date.now(),
+        game,
+        timestamp: now,
       },
       ws
     );
 
-    // Handle incoming messages
+    // 3. Handle incoming client messages
     ws.addEventListener("message", async (msgEvent) => {
       try {
-        const payload = JSON.parse(msgEvent.data);
+        const rawData = msgEvent.data;
+        if (typeof rawData !== "string" || rawData.length > 65536) {
+          // Payload too large (max 64KB)
+          return this.sendJson(ws, { type: "error", error: "Message exceeds 64KB limit" });
+        }
+
+        // Rate limiting: max 75 messages per 5 seconds
+        const currentTime = Date.now();
+        sessionInfo.lastSeen = currentTime;
+        if (currentTime - sessionInfo.windowStart > 5000) {
+          sessionInfo.windowStart = currentTime;
+          sessionInfo.msgCount = 0;
+        }
+        sessionInfo.msgCount++;
+        if (sessionInfo.msgCount > 75) {
+          return this.sendJson(ws, {
+            type: "error",
+            error: "Rate limit exceeded. Please wait a moment.",
+            code: "RATE_LIMITED",
+          });
+        }
+
+        const payload = JSON.parse(rawData);
+
+        // A. Ping / Keepalive
+        if (payload.type === "ping") {
+          return this.sendJson(ws, { type: "pong", timestamp: Date.now() });
+        }
+
+        // B. Standard Chat Message
         if (payload.type === "chat" && typeof payload.text === "string") {
-          const text = payload.text.trim().slice(0, 2000);
+          const text = payload.text.trim().slice(0, 1000);
           if (!text) return;
 
           const broadcastMsg = {
@@ -153,38 +359,67 @@ export class ChatRoom {
             message: text,
             timestamp: Date.now(),
           };
-
           this.broadcast(broadcastMsg);
-        } else if (payload.type === "poker" || payload.type === "game") {
-          // Real-time Poker game action or state sync
-          const msg = {
+          return;
+        }
+
+        // C. Game / Poker Action & State Synchronization
+        if (payload.type === "poker" || payload.type === "game" || payload.type === "action") {
+          const gameMsg = {
             ...payload,
             fromUser: username,
             timestamp: Date.now(),
           };
 
-          // If targeted to a specific user (e.g. private hole cards dealt to that player)
-          if (payload.targetUser) {
-            this.sendToUser(payload.targetUser, msg);
-          } else {
-            // Table broadcast to all seated players & spectators
-            this.broadcast(msg, payload.excludeSelf ? ws : null);
+          // Update host tracking if claim_host event
+          if (payload.action === "claim_host" && payload.newHost) {
+            this.roomMetadata.host = payload.newHost;
           }
-        } else if (payload.type === "ping") {
-          ws.send(JSON.stringify({ type: "pong", timestamp: Date.now() }));
+
+          // Targeted message: Sent ONLY to a specific user (critical for private hole cards!)
+          const target = payload.targetUser || payload.to;
+          if (target) {
+            this.sendToUser(target, gameMsg);
+          } else {
+            // Room broadcast
+            this.broadcast(gameMsg, payload.excludeSelf ? ws : null);
+          }
+          return;
+        }
+
+        // D. Room State Refresh Query
+        if (payload.type === "get_room_state") {
+          return this.sendJson(ws, {
+            type: "room_state",
+            room,
+            user: username,
+            users: Array.from(this.sessions.values()).map((s) => s.username),
+            game: this.roomMetadata.game,
+            host: this.roomMetadata.host,
+            timestamp: Date.now(),
+          });
         }
       } catch (err) {
-        console.error("Worker msg error:", err);
+        console.error("Worker packet processing error:", err);
+        this.sendJson(ws, { type: "error", error: "Malformed JSON packet" });
       }
     });
 
+    // Cleanup on disconnect
     const cleanup = () => {
       this.sessions.delete(ws);
       const remainingUsers = Array.from(this.sessions.values()).map((s) => s.username);
+
+      // Re-assign host if the host disconnected
+      if (this.roomMetadata.host === username) {
+        this.roomMetadata.host = remainingUsers[0] || null;
+      }
+
       this.broadcast({
         type: "user_left",
         user: username,
         users: remainingUsers,
+        newHost: this.roomMetadata.host,
         timestamp: Date.now(),
       });
     };
@@ -193,19 +428,33 @@ export class ChatRoom {
     ws.addEventListener("error", cleanup);
   }
 
+  sendJson(ws, obj) {
+    if (ws.readyState === 1) {
+      try {
+        ws.send(JSON.stringify(obj));
+      } catch (_) {}
+    }
+  }
+
   sendToUser(targetUsername, messageObj) {
-    if (!targetUsername) return;
+    if (!targetUsername) return false;
     const targetClean = String(targetUsername).trim().toLowerCase();
     const serialized = JSON.stringify(messageObj);
+    let delivered = false;
+
     for (const [ws, info] of this.sessions.entries()) {
       if (info && info.username && info.username.toLowerCase() === targetClean) {
         try {
-          ws.send(serialized);
+          if (ws.readyState === 1) {
+            ws.send(serialized);
+            delivered = true;
+          }
         } catch (_) {
           this.sessions.delete(ws);
         }
       }
     }
+    return delivered;
   }
 
   broadcast(messageObj, excludeWs = null) {
@@ -213,11 +462,19 @@ export class ChatRoom {
     for (const [ws] of this.sessions.entries()) {
       if (ws !== excludeWs) {
         try {
-          ws.send(serialized);
+          if (ws.readyState === 1) {
+            ws.send(serialized);
+          }
         } catch (_) {
           this.sessions.delete(ws);
         }
       }
     }
   }
+}
+
+function sanitizeUsername(name) {
+  if (!name) return "Guest";
+  const cleaned = name.replace(/[^\w\s\-\.]/g, "").trim().slice(0, 24);
+  return cleaned || "Player";
 }

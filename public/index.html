@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, interactive-widget=resizes-content, viewport-fit=cover">
-  <title>CFAT Chat</title>
+  <title>CFAT Real-Time Engine | api.cfat.site</title>
   <link rel="stylesheet" href="style.css">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -23,10 +23,19 @@
           </svg>
         </div>
         <div class="brand-text">
-          <h1>chat.cfat.site (PRIVATE API)</h1>
-          <p class="tagline">Stateless edge rooms · Direct peer relay</p>
+          <h1>api.cfat.site</h1>
+          <p class="tagline">Edge Real-Time WebSocket Coordinator & Gaming Hub</p>
         </div>
       </header>
+
+      <!-- Gaming Quick Launch Pill -->
+      <div style="background: rgba(245, 158, 11, 0.1); border: 1px solid rgba(245, 158, 11, 0.3); border-radius: 12px; padding: 10px 14px; margin-bottom: 18px; display: flex; align-items: center; justify-content: space-between;">
+        <div style="display: flex; align-items: center; gap: 8px;">
+          <span style="font-size: 18px;">♠️</span>
+          <span style="font-size: 12px; font-weight: 600; color: #fef08a;">Multiplayer Poker Live</span>
+        </div>
+        <a href="http://localhost:4000" id="link-poker" target="_blank" style="background: #d97706; color: white; text-decoration: none; font-size: 11px; font-weight: 700; padding: 4px 10px; border-radius: 6px;">Play Poker &rarr;</a>
+      </div>
 
       <nav class="segmented-control" aria-label="Room access mode">
         <button id="tab-join" class="tab-btn active" type="button" onclick="switchTab('join')">Join Room</button>

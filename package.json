@@ -1,7 +1,7 @@
 {
-  "name": "chat-api",
-  "version": "1.0.0",
-  "description": "Zero-server, real-time room chat web application for chat.cfat.site",
+  "name": "cfat-api",
+  "version": "2.0.0",
+  "description": "Scalable real-time Edge WebSocket coordinator & multiplayer gaming hub for api.cfat.site",
   "main": "worker/index.js",
   "scripts": {
     "start": "node dev-server.js",

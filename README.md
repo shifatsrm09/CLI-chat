@@ -1,22 +1,28 @@
-# CFAT Chat API (`chat.cfat.site`)
+# ⚡ CFAT Edge Real-Time Engine (`api.cfat.site`)
 
-> Zero-server, zero-cost, persistent room-based real-time chat application for **`chat.cfat.site`**.  
-> Powered by modern Edge WebSockets & Cloudflare Durable Objects.
+> High-performance, zero-server, persistent room-based real-time coordination engine for **`api.cfat.site`**.  
+> Powers real-time multiplayer games (Texas Hold'em Poker, etc.) and low-latency room chat at the edge with Cloudflare Durable Objects.
 
 ---
 
-## ⚡ Features
-- **Zero Cold Starts**: 0ms connection latency (no 60s VM sleep/wake cycle like Render/Heroku).
-- **100% Free Forever**: Runs within Cloudflare & Vercel generous free tiers ($0.00).
-- **Room Coordination**:
-  - Host a room (one-click code generator or custom code)
-  - Join an existing room
-  - Instant 1-click invite link sharing (`https://chat.cfat.site/?room=ROOM_CODE`)
-- **Real-Time Experience**:
-  - Real-time messages with timestamps and unique user avatar hues
-  - Live participant count & active member drawer
-  - Web Audio API notification sounds (synthesized dynamically in the browser, no external audio files required)
-  - Automatic reconnection handling
+## ⚡ Architecture & Capabilities
+
+- **Zero Cold Starts**: 0ms connection latency powered by Cloudflare Durable Objects.
+- **Multi-Game Coordination**:
+  - Texas Hold'em Poker (`POKER-XXXX`) with private hole card routing, side-pot tracking, and turn synchronization.
+  - Room Chat (`CHAT-XXXX`) with presence, audio notifications, and active participant drawers.
+- **Targeted Private Messaging**:
+  - Secure 1-to-1 packet routing (`targetUser` / `to`) so secret player cards remain completely private until showdown.
+- **Edge Flood & Rate Limiting**:
+  - Built-in token-bucket rate limiting per connection (max 75 msgs/5s) and 64KB message cap to guarantee server stability.
+- **Universal REST Endpoints**:
+  - `GET /api/health` — Health check, engine stats, and version info.
+  - `GET /api/config` — Edge WebSocket coordinator URL & game settings.
+  - `GET /api/games` — Catalog of supported multiplayer games.
+  - `GET /api/poker-config` — Poker buy-in, blinds structure, and turn timer configuration.
+  - `POST /api/rooms/create?game=poker` — Instant room generator.
+  - `GET /api/rooms/info?room=POKER-1001` — Non-intrusive room participant inspector.
+  - `GET /ws?room=CODE&user=NAME&game=GAME` — WebSocket connection gateway.
 
 ---
 
@@ -24,15 +30,16 @@
 
 ```
 chat-api/
-├── public/                 # Static Web Frontend (deployable to Vercel)
-│   ├── index.html          # Clean, responsive single-page chat UI
+├── public/                 # Static Web Portal & Room Client
+│   ├── index.html          # Clean responsive lobby & developer console
 │   ├── style.css           # Modern dark-mode aesthetic
-│   └── app.js             # Client WebSocket manager & room logic
+│   └── app.js              # Client WebSocket manager & room logic
 ├── worker/
-│   └── index.js           # Cloudflare Worker + Durable Objects room relay
+│   └── index.js            # Cloudflare Worker + Durable Objects game & room coordinator
 ├── api/
-│   └── config.js          # Vercel serverless function (optional config)
-├── dev-server.js           # Local HTTP + WebSocket server for testing
+│   ├── config.js           # Vercel serverless platform config
+│   └── poker-config.js     # Poker-specific coordinator configuration
+├── dev-server.js           # Full local HTTP + WebSocket parity server
 ├── wrangler.jsonc          # Cloudflare Worker configuration
 └── vercel.json             # Vercel deployment configuration
 ```
@@ -40,8 +47,6 @@ chat-api/
 ---
 
 ## 🚀 1. Local Testing
-
-To run the complete chat app and WebSocket relay locally on your computer:
 
 ```bash
 npm install
@@ -52,33 +57,28 @@ Open your browser to:
 ```
 http://localhost:3000
 ```
-Open two tabs, join the same room (e.g. `CFAT-1001`), and chat in real-time!
+
+Try the REST endpoints:
+- `http://localhost:3000/api/health`
+- `http://localhost:3000/api/config`
+- `http://localhost:3000/api/poker-config`
 
 ---
 
-## ☁️ 2. Deploying to Cloudflare (Real-Time WebSocket Engine)
+## ☁️ 2. Deploying to Cloudflare Worker (`api.cfat.site`)
 
-To deploy the Cloudflare Worker WebSocket coordinator with 0ms cold start:
-
-1. **Log into Cloudflare**:
-   ```bash
-   npx wrangler login
-   ```
-2. **Deploy the Worker**:
+1. **Deploy the Worker**:
    ```bash
    npx wrangler deploy
    ```
-3. This creates your live WebSocket endpoint (e.g. `wss://chat-api.<your-subdomain>.workers.dev`).
-4. (Optional) In Cloudflare Dashboard, bind your custom domain like `chat-api.cfat.site` or `ws.cfat.site` under **Worker Settings -> Domains**.
+2. In Cloudflare Dashboard, bind your custom domain **`api.cfat.site`** under:
+   **Worker Settings -> Domains & Routes -> Custom Domains**.
 
 ---
 
-## ▲ 3. Deploying the Web Frontend to Vercel (`chat.cfat.site`)
+## ▲ 3. Deploying to Vercel
 
-1. Go to your [Vercel Dashboard](https://vercel.com).
-2. Click **Add New Project** -> Import GitHub repository **`shifatsrm09/chat-api`**.
-3. Framework Preset: **Other** (Output Directory: `public`).
-4. (Optional) Set Environment Variable in Vercel:
-   - `NEXT_PUBLIC_WS_URL`: `wss://your-cloudflare-worker-url.workers.dev/ws`
-5. Click **Deploy**.
-6. In Vercel Project Settings -> **Domains**, add **`chat.cfat.site`**.
+1. Import the GitHub repository in Vercel.
+2. In Vercel Project Settings -> **Domains**, bind **`api.cfat.site`**.
+3. Environment Variables (optional override):
+   - `NEXT_PUBLIC_WS_URL`: `wss://api.cfat.site/ws`

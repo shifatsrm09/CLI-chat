@@ -1,6 +1,6 @@
 /**
- * CFAT Chat - Room Messaging Client
- * chat.cfat.site
+ * CFAT Real-Time Engine Client
+ * api.cfat.site
  */
 
 // Application State
