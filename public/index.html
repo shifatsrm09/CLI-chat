@@ -24,18 +24,8 @@
         </div>
         <div class="brand-text">
           <h1>api.cfat.site</h1>
-          <p class="tagline">Edge Real-Time WebSocket Coordinator & Gaming Hub</p>
         </div>
       </header>
-
-      <!-- Gaming Quick Launch Pill -->
-      <div style="background: rgba(245, 158, 11, 0.1); border: 1px solid rgba(245, 158, 11, 0.3); border-radius: 12px; padding: 10px 14px; margin-bottom: 18px; display: flex; align-items: center; justify-content: space-between;">
-        <div style="display: flex; align-items: center; gap: 8px;">
-          <span style="font-size: 18px;">♠️</span>
-          <span style="font-size: 12px; font-weight: 600; color: #fef08a;">Multiplayer Poker Live</span>
-        </div>
-        <a href="http://localhost:4000" id="link-poker" target="_blank" style="background: #d97706; color: white; text-decoration: none; font-size: 11px; font-weight: 700; padding: 4px 10px; border-radius: 6px;">Play Poker &rarr;</a>
-      </div>
 
       <nav class="segmented-control" aria-label="Room access mode">
         <button id="tab-join" class="tab-btn active" type="button" onclick="switchTab('join')">Join Room</button>
@@ -46,7 +36,7 @@
       <form id="join-form" class="auth-form" onsubmit="handleJoin(event)">
         <div class="field">
           <label for="join-room">Room Code</label>
-          <input type="text" id="join-room" placeholder="CFAT-4821" required autocomplete="off" spellcheck="false" maxlength="24">
+          <input type="text" id="join-room" placeholder="4821" required autocomplete="off" spellcheck="false" maxlength="24">
         </div>
         <div class="field">
           <label for="join-user">Your Name</label>
@@ -63,7 +53,7 @@
         <div class="field">
           <label for="host-room">Room Code</label>
           <div class="field-composite">
-            <input type="text" id="host-room" placeholder="CFAT-4821" required autocomplete="off" spellcheck="false" maxlength="24">
+            <input type="text" id="host-room" placeholder="4821" required autocomplete="off" spellcheck="false" maxlength="24">
             <button type="button" class="btn-addon" onclick="generateNewRoomCode()" title="Generate new code" aria-label="Generate new code">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"/></svg>
             </button>
@@ -96,7 +86,7 @@
         <div class="room-descriptor">
           <div class="room-identifier">
             <span class="muted-prefix">Room</span>
-            <span id="active-room-code" class="room-code-badge">CFAT-XXXX</span>
+            <span id="active-room-code" class="room-code-badge">XXXX</span>
             <button class="btn-text-action" onclick="copyInviteLink()" title="Copy invite link">
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
               <span>Share</span>

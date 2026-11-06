@@ -127,16 +127,15 @@ export default {
 
     // 7. Create Room Code Generator API
     if (url.pathname === "/api/rooms/create" && (request.method === "POST" || request.method === "GET")) {
-      const gameType = (url.searchParams.get("game") || "POKER").toUpperCase();
-      const prefix = gameType === "CHAT" ? "CHAT" : "POKER";
+      const gameType = (url.searchParams.get("game") || "CHAT").toLowerCase();
       const randomNum = Math.floor(1000 + Math.random() * 9000);
-      const roomCode = `${prefix}-${randomNum}`;
+      const roomCode = String(randomNum);
       const wsProtocol = url.protocol === "https:" ? "wss:" : "ws:";
 
       return jsonResponse({
         status: "ok",
         room: roomCode,
-        game: gameType.toLowerCase(),
+        game: gameType,
         wsUrl: `${wsProtocol}//${url.host}/ws?room=${roomCode}`,
         createdAt: new Date().toISOString(),
       });

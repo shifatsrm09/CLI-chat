@@ -118,9 +118,8 @@ function switchTab(tab) {
 }
 
 function generateRoomCode() {
-  const prefix = "CFAT";
   const num = Math.floor(1000 + Math.random() * 9000);
-  return `${prefix}-${num}`;
+  return String(num);
 }
 
 function generateNewRoomCode() {
