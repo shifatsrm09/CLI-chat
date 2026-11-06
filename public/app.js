@@ -1,6 +1,7 @@
 /**
  * CFAT Real-Time Engine Client
- * api.cfat.site
+ * api.cfat.site / chat.cfat.site
+ * Supports real-time room chat, targeted whispers, and binary file transfer.
  */
 
 // Application State
@@ -14,6 +15,8 @@ const state = {
   audioCtx: null,
   reconnectAttempts: 0,
   maxReconnectAttempts: 5,
+  outgoingTransfers: {}, // id -> transferObj
+  incomingTransfers: {}, // id -> transferObj
 };
 
 // DOM Elements
@@ -39,12 +42,15 @@ const elements = {
   messagesStream: document.getElementById("messages-stream"),
   chatInput: document.getElementById("chat-input"),
   sendButton: document.getElementById("send-button"),
+  attachButton: document.getElementById("attach-button"),
+  fileInput: document.getElementById("file-input"),
+  dropOverlay: document.getElementById("drop-overlay"),
   soundIconOn: document.getElementById("sound-icon-on"),
   soundIconOff: document.getElementById("sound-icon-off"),
   toastContainer: document.getElementById("toast-container"),
 };
 
-// Curated architectural color palette for avatars (no random rainbow hues)
+// Architectural color palette for avatars
 const AVATAR_PALETTE = [
   "#2563eb", // Cobalt
   "#0f766e", // Deep Teal
@@ -56,10 +62,15 @@ const AVATAR_PALETTE = [
   "#0369a1", // Steel Blue
 ];
 
+// File Transfer Config
+const WEB_FILE_SLICE = 24 * 1024; // 24 KB raw payload per chunk
+const WEB_CHUNK_PACE_MS = 70;      // 70ms pacing (~14 msgs/sec, safe under Cloudflare 75 msgs / 5s)
+
 // Initialization
 document.addEventListener("DOMContentLoaded", async () => {
   updateSoundUI();
   initMobileViewport();
+  initDragAndDrop();
 
   const savedUser = localStorage.getItem("cfat_username") || "";
   if (savedUser) {
@@ -166,7 +177,7 @@ function connectWebSocket() {
     targetWs = `${proto}//${window.location.host}/ws`;
   }
 
-  const endpoint = `${targetWs}?room=${encodeURIComponent(state.room)}&user=${encodeURIComponent(state.username)}`;
+  const endpoint = `${targetWs}?room=${encodeURIComponent(state.room)}&user=${encodeURIComponent(state.username)}&game=chat`;
 
   try {
     state.ws = new WebSocket(endpoint);
@@ -224,6 +235,7 @@ function handleIncomingPacket(packet) {
     case "user_left":
       updateParticipants(packet.users || []);
       renderSystemMessage(`${packet.user} left the room`);
+      cleanupUserFileTransfers(packet.user);
       break;
 
     case "chat":
@@ -231,6 +243,48 @@ function handleIncomingPacket(packet) {
       if (packet.user !== state.username) {
         playChime("msg");
       }
+      break;
+
+    case "action":
+    case "game":
+      handleActionPacket(packet);
+      break;
+  }
+}
+
+// ACTION ROUTER (Whispers & File Sharing)
+function handleActionPacket(packet) {
+  const sender = packet.fromUser || packet.user;
+  const action = packet.action;
+
+  switch (action) {
+    case "whisper":
+      renderWhisperMessage(sender, state.username, packet.message, packet.timestamp || Date.now(), false);
+      playChime("msg");
+      break;
+
+    case "file_offer":
+      handleIncomingFileOffer(packet);
+      break;
+
+    case "file_accept":
+      handlePeerFileAccept(packet);
+      break;
+
+    case "file_reject":
+      handlePeerFileReject(packet);
+      break;
+
+    case "file_chunk":
+      handleIncomingFileChunk(packet);
+      break;
+
+    case "file_done":
+      handleIncomingFileDone(packet);
+      break;
+
+    case "file_cancel":
+      handlePeerFileCancel(packet);
       break;
   }
 }
@@ -262,6 +316,32 @@ function renderChatMessage(sender, text, timestamp) {
   scrollToBottom();
 }
 
+function renderWhisperMessage(fromUser, toUser, message, timestamp, isSelf) {
+  const timeStr = formatTime(timestamp);
+  const row = document.createElement("div");
+  row.className = `msg-row ${isSelf ? "self" : "peer"} whisper`;
+
+  const avatarColor = getAvatarColor(fromUser);
+  const initial = fromUser.charAt(0).toUpperCase();
+  const label = isSelf ? `PM to ${escapeHTML(toUser)}` : `PM from ${escapeHTML(fromUser)}`;
+
+  row.innerHTML = `
+    <div class="msg-avatar" style="background: ${avatarColor}">${initial}</div>
+    <div class="msg-bubble-wrap">
+      <div class="msg-meta">
+        <span class="whisper-badge">Whisper</span>
+        <span>${label}</span>
+        <span>·</span>
+        <span>${timeStr}</span>
+      </div>
+      <div class="msg-bubble">${escapeHTML(message)}</div>
+    </div>
+  `;
+
+  elements.messagesStream.appendChild(row);
+  scrollToBottom();
+}
+
 function renderSystemMessage(text) {
   const div = document.createElement("div");
   div.className = "system-pill";
@@ -274,6 +354,28 @@ function handleSendMessage(e) {
   if (e) e.preventDefault();
   const text = elements.chatInput.value.trim();
   if (!text || !state.ws || state.ws.readyState !== WebSocket.OPEN) return;
+
+  // Handle Whisper command: /w <user> <message>
+  if (text.startsWith("/w ") || text.startsWith("/whisper ")) {
+    const parts = text.split(" ");
+    parts.shift();
+    const to = parts.shift();
+    const content = parts.join(" ").trim();
+    if (!to || !content) {
+      showToast("Usage: /w <user> <message>");
+      return;
+    }
+    state.ws.send(JSON.stringify({
+      type: "action",
+      action: "whisper",
+      to,
+      message: content,
+    }));
+    renderWhisperMessage(state.username, to, content, Date.now(), true);
+    elements.chatInput.value = "";
+    elements.chatInput.focus();
+    return;
+  }
 
   state.ws.send(JSON.stringify({ type: "chat", text }));
   elements.chatInput.value = "";
@@ -289,6 +391,610 @@ function handleInputKeydown(e) {
 
 function scrollToBottom() {
   elements.messagesStream.scrollTop = elements.messagesStream.scrollHeight;
+}
+
+// ============================================================
+// FILE SHARING (SENDING & RECEIVING)
+// ============================================================
+
+function triggerFileInput() {
+  if (!state.ws || state.ws.readyState !== WebSocket.OPEN) {
+    return showToast("Connect to a room first");
+  }
+  elements.fileInput.value = "";
+  elements.fileInput.click();
+}
+
+function handleFileSelected(e) {
+  const file = e.target.files?.[0];
+  if (!file) return;
+  sendFile(file);
+}
+
+function initDragAndDrop() {
+  const dropOverlay = elements.dropOverlay;
+  const chatScreen = elements.chatScreen;
+
+  let dragCounter = 0;
+
+  window.addEventListener("dragenter", (e) => {
+    if (!state.room || !chatScreen.classList.contains("active")) return;
+    dragCounter++;
+    if (dropOverlay) dropOverlay.classList.remove("hidden");
+  });
+
+  window.addEventListener("dragleave", (e) => {
+    if (!state.room || !chatScreen.classList.contains("active")) return;
+    dragCounter--;
+    if (dragCounter <= 0 && dropOverlay) {
+      dragCounter = 0;
+      dropOverlay.classList.add("hidden");
+    }
+  });
+
+  window.addEventListener("dragover", (e) => {
+    e.preventDefault();
+  });
+
+  window.addEventListener("drop", (e) => {
+    e.preventDefault();
+    dragCounter = 0;
+    if (dropOverlay) dropOverlay.classList.add("hidden");
+    if (!state.room || !chatScreen.classList.contains("active")) return;
+
+    const file = e.dataTransfer?.files?.[0];
+    if (file) {
+      sendFile(file);
+    }
+  });
+
+  // Support pasting image/file from clipboard
+  window.addEventListener("paste", (e) => {
+    if (!state.room || !chatScreen.classList.contains("active")) return;
+    const file = e.clipboardData?.files?.[0];
+    if (file) {
+      sendFile(file);
+    }
+  });
+}
+
+async function sendFile(file) {
+  if (!state.ws || state.ws.readyState !== WebSocket.OPEN) {
+    return showToast("Not connected to room");
+  }
+  if (file.size > 100 * 1024 * 1024) {
+    return showToast("File too large (100MB limit)");
+  }
+
+  showToast(`Preparing ${file.name}...`);
+  const transferId = Math.random().toString(36).substring(2, 10);
+  const rawBuffer = await file.arrayBuffer();
+  const rawBytes = new Uint8Array(rawBuffer);
+
+  // Compress with deflate-raw if supported and smaller
+  let payloadBytes = rawBytes;
+  let isCompressed = false;
+  try {
+    const deflated = await compressDeflateRaw(rawBytes);
+    if (deflated.length < rawBytes.length) {
+      payloadBytes = deflated;
+      isCompressed = true;
+    }
+  } catch (_) {}
+
+  const totalChunks = payloadBytes.length > 0 ? Math.ceil(payloadBytes.length / WEB_FILE_SLICE) : 0;
+
+  const transfer = {
+    id: transferId,
+    filename: file.name,
+    size: file.size,
+    payload: payloadBytes,
+    compressed: isCompressed ? 1 : 0,
+    totalChunks,
+    acceptedBy: null,
+    timer: null,
+    cardEl: null,
+  };
+  state.outgoingTransfers[transferId] = transfer;
+
+  transfer.cardEl = renderOutgoingFileCard(transfer);
+
+  state.ws.send(JSON.stringify({
+    type: "action",
+    action: "file_offer",
+    id: transferId,
+    filename: file.name,
+    size: file.size,
+    compressed: transfer.compressed,
+    totalChunks: transfer.totalChunks,
+  }));
+}
+
+function handlePeerFileAccept(packet) {
+  const transfer = state.outgoingTransfers[packet.id];
+  if (!transfer) return;
+  const peer = packet.fromUser || packet.user;
+
+  if (transfer.acceptedBy) {
+    state.ws.send(JSON.stringify({
+      type: "action",
+      action: "file_reject",
+      to: peer,
+      id: packet.id,
+      reason: "Already accepted by another user",
+    }));
+    return;
+  }
+
+  transfer.acceptedBy = peer;
+  transmitOutgoingFile(transfer, peer);
+}
+
+function handlePeerFileReject(packet) {
+  const transfer = state.outgoingTransfers[packet.id];
+  if (!transfer || transfer.acceptedBy) return;
+  const peer = packet.fromUser || packet.user;
+  updateFileCardStatus(transfer.cardEl, `${peer} declined the file.`, 0);
+  delete state.outgoingTransfers[packet.id];
+}
+
+function transmitOutgoingFile(transfer, recipient) {
+  const payload = transfer.payload;
+  const totalChunks = transfer.totalChunks;
+  let chunkIndex = 0;
+
+  updateFileCardStatus(transfer.cardEl, `Sending to ${recipient}...`, 0);
+
+  if (totalChunks === 0) {
+    state.ws.send(JSON.stringify({
+      type: "action",
+      action: "file_done",
+      to: recipient,
+      id: transfer.id,
+    }));
+    updateFileCardDone(transfer.cardEl, `✓ Sent to ${recipient}`);
+    delete state.outgoingTransfers[transfer.id];
+    return;
+  }
+
+  function sendNextChunk() {
+    if (!state.ws || state.ws.readyState !== WebSocket.OPEN || !state.outgoingTransfers[transfer.id]) {
+      return;
+    }
+
+    if (chunkIndex >= totalChunks) {
+      state.ws.send(JSON.stringify({
+        type: "action",
+        action: "file_done",
+        to: recipient,
+        id: transfer.id,
+      }));
+      updateFileCardDone(transfer.cardEl, `✓ Sent to ${recipient}`);
+      delete state.outgoingTransfers[transfer.id];
+      return;
+    }
+
+    const start = chunkIndex * WEB_FILE_SLICE;
+    const slice = payload.subarray(start, start + WEB_FILE_SLICE);
+    const b64 = uint8ToBase64(slice);
+
+    state.ws.send(JSON.stringify({
+      type: "action",
+      action: "file_chunk",
+      to: recipient,
+      id: transfer.id,
+      i: chunkIndex,
+      n: totalChunks,
+      d: b64,
+    }));
+
+    chunkIndex++;
+    const pct = Math.round((chunkIndex / totalChunks) * 100);
+    const approxBytes = Math.min(transfer.size, Math.round((chunkIndex / totalChunks) * transfer.size));
+    updateFileCardStatus(transfer.cardEl, `Sending to ${recipient} (${humanSize(approxBytes)} / ${humanSize(transfer.size)})...`, pct);
+
+    transfer.timer = setTimeout(sendNextChunk, WEB_CHUNK_PACE_MS);
+  }
+
+  sendNextChunk();
+}
+
+function handleIncomingFileOffer(packet) {
+  const sender = packet.fromUser || packet.user;
+  if (!sender || sender === state.username) return;
+
+  const id = packet.id;
+  const filename = String(packet.filename || "file").replace(/[/\\]/g, "_");
+  const size = Number(packet.size) || 0;
+  const compressed = Boolean(packet.compressed);
+  const totalChunks = Number(packet.totalChunks) || 0;
+
+  const transfer = {
+    id,
+    from: sender,
+    filename,
+    size,
+    compressed,
+    totalChunks,
+    chunks: new Array(Math.max(1, totalChunks)).fill(null),
+    receivedChunks: 0,
+    cardEl: null,
+    finalized: false,
+  };
+  state.incomingTransfers[id] = transfer;
+
+  transfer.cardEl = renderIncomingFileCard(transfer);
+  playChime("msg");
+}
+
+function acceptIncomingFile(transferId) {
+  const t = state.incomingTransfers[transferId];
+  if (!t) return;
+
+  state.ws.send(JSON.stringify({
+    type: "action",
+    action: "file_accept",
+    to: t.from,
+    id: t.id,
+  }));
+
+  updateFileCardReceiving(t.cardEl, `Receiving from ${t.from}...`);
+
+  if (t.size === 0 && t.totalChunks === 0) {
+    finalizeIncomingFile(t);
+  }
+}
+
+function rejectIncomingFile(transferId) {
+  const t = state.incomingTransfers[transferId];
+  if (!t) return;
+
+  state.ws.send(JSON.stringify({
+    type: "action",
+    action: "file_reject",
+    to: t.from,
+    id: t.id,
+  }));
+
+  updateFileCardDone(t.cardEl, "Declined");
+  delete state.incomingTransfers[transferId];
+}
+
+function handleIncomingFileChunk(packet) {
+  const t = state.incomingTransfers[packet.id];
+  const sender = packet.fromUser || packet.user;
+  if (!t || t.from !== sender) return;
+
+  const idx = Number(packet.i);
+  const total = Number(packet.n);
+  const b64 = String(packet.d || "");
+
+  if (!Number.isInteger(idx) || idx < 0 || idx >= total || !b64) return;
+  if (t.chunks[idx] !== null) return; // already got this chunk
+
+  const chunkBuf = base64ToUint8(b64);
+  t.chunks[idx] = chunkBuf;
+  t.receivedChunks++;
+
+  const pct = Math.round((t.receivedChunks / t.totalChunks) * 100);
+  const approxBytes = Math.min(t.size, Math.round((t.receivedChunks / t.totalChunks) * t.size));
+  updateFileCardStatus(t.cardEl, `Receiving (${humanSize(approxBytes)} / ${humanSize(t.size)})...`, pct);
+
+  if (t.receivedChunks >= t.totalChunks) {
+    finalizeIncomingFile(t);
+  }
+}
+
+function handleIncomingFileDone(packet) {
+  const t = state.incomingTransfers[packet.id];
+  if (t && t.receivedChunks >= t.totalChunks) {
+    finalizeIncomingFile(t);
+  }
+}
+
+function handlePeerFileCancel(packet) {
+  const id = packet.id;
+  const t = state.incomingTransfers[id];
+  if (t) {
+    updateFileCardDone(t.cardEl, "Transfer cancelled by sender");
+    delete state.incomingTransfers[id];
+  }
+}
+
+async function finalizeIncomingFile(t) {
+  if (t.finalized) return;
+  t.finalized = true;
+
+  updateFileCardStatus(t.cardEl, "Assembling & decompressing...", 100);
+
+  let combined;
+  if (t.totalChunks > 0) {
+    const totalBytes = t.chunks.reduce((acc, c) => acc + (c ? c.length : 0), 0);
+    combined = new Uint8Array(totalBytes);
+    let offset = 0;
+    for (const c of t.chunks) {
+      if (c) {
+        combined.set(c, offset);
+        offset += c.length;
+      }
+    }
+  } else {
+    combined = new Uint8Array(0);
+  }
+
+  let finalBytes = combined;
+  if (t.compressed && combined.length > 0) {
+    try {
+      finalBytes = await decompressDeflateRaw(combined);
+    } catch (err) {
+      console.warn("Decompression error, using raw:", err);
+      finalBytes = combined;
+    }
+  }
+
+  const blob = new Blob([finalBytes]);
+  const blobUrl = URL.createObjectURL(blob);
+  t.downloadUrl = blobUrl;
+
+  updateFileCardReady(t.cardEl, t.filename, humanSize(finalBytes.length), blobUrl);
+  playChime("msg");
+  showToast(`File ready: ${t.filename}`);
+
+  // Automatically trigger download
+  triggerDownload(blobUrl, t.filename);
+}
+
+function cleanupUserFileTransfers(peerName) {
+  for (const [id, t] of Object.entries(state.incomingTransfers)) {
+    if (t.from === peerName && !t.finalized) {
+      updateFileCardDone(t.cardEl, `${peerName} disconnected`);
+      delete state.incomingTransfers[id];
+    }
+  }
+  for (const [id, t] of Object.entries(state.outgoingTransfers)) {
+    if (t.acceptedBy === peerName) {
+      if (t.timer) clearTimeout(t.timer);
+      updateFileCardDone(t.cardEl, `${peerName} disconnected`);
+      delete state.outgoingTransfers[id];
+    }
+  }
+}
+
+// FILE CARD UI RENDERERS
+function renderOutgoingFileCard(transfer) {
+  const timeStr = formatTime(Date.now());
+  const row = document.createElement("div");
+  row.className = "msg-row self";
+
+  const avatarColor = getAvatarColor(state.username);
+  const initial = state.username.charAt(0).toUpperCase();
+
+  row.innerHTML = `
+    <div class="msg-avatar" style="background: ${avatarColor}">${initial}</div>
+    <div class="msg-bubble-wrap">
+      <div class="msg-meta">
+        <span>${escapeHTML(state.username)}</span>
+        <span>·</span>
+        <span>${timeStr}</span>
+      </div>
+      <div class="file-card" id="file-${transfer.id}">
+        <div class="file-card-main">
+          <div class="file-card-icon">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line><polyline points="10 9 9 9 8 9"></polyline></svg>
+          </div>
+          <div class="file-card-details">
+            <div class="file-card-name" title="${escapeHTML(transfer.filename)}">${escapeHTML(transfer.filename)}</div>
+            <div class="file-card-size">${humanSize(transfer.size)}</div>
+          </div>
+        </div>
+        <div class="file-progress-track">
+          <div class="file-progress-fill" style="width: 0%;"></div>
+        </div>
+        <div class="file-card-status">
+          <span>Offered to room · Waiting for peer...</span>
+          <span class="pct-text">0%</span>
+        </div>
+      </div>
+    </div>
+  `;
+
+  elements.messagesStream.appendChild(row);
+  scrollToBottom();
+  return row.querySelector(`#file-${transfer.id}`);
+}
+
+function renderIncomingFileCard(transfer) {
+  const timeStr = formatTime(Date.now());
+  const row = document.createElement("div");
+  row.className = "msg-row peer";
+
+  const avatarColor = getAvatarColor(transfer.from);
+  const initial = transfer.from.charAt(0).toUpperCase();
+
+  row.innerHTML = `
+    <div class="msg-avatar" style="background: ${avatarColor}">${initial}</div>
+    <div class="msg-bubble-wrap">
+      <div class="msg-meta">
+        <span>${escapeHTML(transfer.from)}</span>
+        <span>·</span>
+        <span>${timeStr}</span>
+      </div>
+      <div class="file-card" id="file-${transfer.id}">
+        <div class="file-card-main">
+          <div class="file-card-icon">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line><polyline points="10 9 9 9 8 9"></polyline></svg>
+          </div>
+          <div class="file-card-details">
+            <div class="file-card-name" title="${escapeHTML(transfer.filename)}">${escapeHTML(transfer.filename)}</div>
+            <div class="file-card-size">${humanSize(transfer.size)}</div>
+          </div>
+        </div>
+        <div class="file-progress-track hidden">
+          <div class="file-progress-fill" style="width: 0%;"></div>
+        </div>
+        <div class="file-card-status">
+          <span>${escapeHTML(transfer.from)} wants to send this file.</span>
+          <span class="pct-text"></span>
+        </div>
+        <div class="file-card-actions">
+          <button type="button" class="btn-file primary" onclick="acceptIncomingFile('${transfer.id}')">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
+            <span>Accept</span>
+          </button>
+          <button type="button" class="btn-file secondary" onclick="rejectIncomingFile('${transfer.id}')">
+            <span>Decline</span>
+          </button>
+        </div>
+      </div>
+    </div>
+  `;
+
+  elements.messagesStream.appendChild(row);
+  scrollToBottom();
+  return row.querySelector(`#file-${transfer.id}`);
+}
+
+function updateFileCardStatus(cardEl, text, pct) {
+  if (!cardEl) return;
+  const statusSpan = cardEl.querySelector(".file-card-status span:first-child");
+  const pctSpan = cardEl.querySelector(".pct-text");
+  const fill = cardEl.querySelector(".file-progress-fill");
+  const track = cardEl.querySelector(".file-progress-track");
+
+  if (track) track.classList.remove("hidden");
+  if (statusSpan) statusSpan.textContent = text;
+  if (pctSpan && typeof pct === "number") pctSpan.textContent = `${pct}%`;
+  if (fill && typeof pct === "number") fill.style.width = `${pct}%`;
+}
+
+function updateFileCardReceiving(cardEl, text) {
+  if (!cardEl) return;
+  const actions = cardEl.querySelector(".file-card-actions");
+  if (actions) actions.remove();
+  const track = cardEl.querySelector(".file-progress-track");
+  if (track) track.classList.remove("hidden");
+  const statusSpan = cardEl.querySelector(".file-card-status span:first-child");
+  if (statusSpan) statusSpan.textContent = text;
+}
+
+function updateFileCardDone(cardEl, text) {
+  if (!cardEl) return;
+  const actions = cardEl.querySelector(".file-card-actions");
+  if (actions) actions.remove();
+  const track = cardEl.querySelector(".file-progress-track");
+  if (track) track.classList.add("hidden");
+  const statusSpan = cardEl.querySelector(".file-card-status span:first-child");
+  if (statusSpan) statusSpan.textContent = text;
+  const pctSpan = cardEl.querySelector(".pct-text");
+  if (pctSpan) pctSpan.textContent = "";
+}
+
+function updateFileCardReady(cardEl, filename, sizeStr, downloadUrl) {
+  if (!cardEl) return;
+  const track = cardEl.querySelector(".file-progress-track");
+  if (track) track.classList.add("hidden");
+  const statusSpan = cardEl.querySelector(".file-card-status span:first-child");
+  if (statusSpan) statusSpan.textContent = `✓ Ready (${sizeStr})`;
+  const pctSpan = cardEl.querySelector(".pct-text");
+  if (pctSpan) pctSpan.textContent = "";
+
+  const actions = cardEl.querySelector(".file-card-actions") || document.createElement("div");
+  actions.className = "file-card-actions";
+  actions.innerHTML = `
+    <a class="btn-file download" href="${downloadUrl}" download="${escapeHTML(filename)}">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+      <span>Download</span>
+    </a>
+  `;
+  if (!cardEl.querySelector(".file-card-actions")) {
+    cardEl.appendChild(actions);
+  }
+}
+
+// ============================================================
+// BASE64 & DEFLATE-RAW STREAM UTILITIES
+// ============================================================
+
+function uint8ToBase64(bytes) {
+  let binary = "";
+  const len = bytes.byteLength;
+  const chunkSize = 0x8000;
+  for (let i = 0; i < len; i += chunkSize) {
+    const chunk = bytes.subarray(i, Math.min(i + chunkSize, len));
+    binary += String.fromCharCode.apply(null, chunk);
+  }
+  return btoa(binary);
+}
+
+function base64ToUint8(base64) {
+  const binary = atob(base64);
+  const len = binary.length;
+  const bytes = new Uint8Array(len);
+  for (let i = 0; i < len; i++) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return bytes;
+}
+
+async function compressDeflateRaw(uint8Array) {
+  if (typeof CompressionStream === "undefined") return uint8Array;
+  const cs = new CompressionStream("deflate-raw");
+  const writer = cs.writable.getWriter();
+  writer.write(uint8Array);
+  writer.close();
+  const chunks = [];
+  const reader = cs.readable.getReader();
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    chunks.push(value);
+  }
+  const total = chunks.reduce((acc, c) => acc + c.length, 0);
+  const res = new Uint8Array(total);
+  let offset = 0;
+  for (const c of chunks) {
+    res.set(c, offset);
+    offset += c.length;
+  }
+  return res;
+}
+
+async function decompressDeflateRaw(uint8Array) {
+  if (typeof DecompressionStream === "undefined") return uint8Array;
+  const ds = new DecompressionStream("deflate-raw");
+  const writer = ds.writable.getWriter();
+  writer.write(uint8Array);
+  writer.close();
+  const chunks = [];
+  const reader = ds.readable.getReader();
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    chunks.push(value);
+  }
+  const total = chunks.reduce((acc, c) => acc + c.length, 0);
+  const res = new Uint8Array(total);
+  let offset = 0;
+  for (const c of chunks) {
+    res.set(c, offset);
+    offset += c.length;
+  }
+  return res;
+}
+
+function humanSize(bytes) {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1048576) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / 1048576).toFixed(1)} MB`;
+}
+
+function triggerDownload(url, filename) {
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
 }
 
 // PARTICIPANTS
@@ -352,7 +1058,6 @@ function leaveRoom() {
   elements.lobbyScreen.classList.add("active");
 }
 
-// Mobile Viewport Handler (Messenger-style fixed header, scrollable messages)
 function initMobileViewport() {
   if (!window.visualViewport) return;
 
@@ -399,7 +1104,7 @@ function showToast(msg) {
   setTimeout(() => toast.remove(), 2400);
 }
 
-// SOUND EFFECTS (Web Audio API Synthesizer - Clean clicks/tones)
+// SOUND EFFECTS
 function toggleSound() {
   state.soundEnabled = !state.soundEnabled;
   localStorage.setItem("cfat_sound", state.soundEnabled);
