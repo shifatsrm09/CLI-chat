@@ -1,21 +1,25 @@
 {
   "name": "cli-chat",
-  "version": "2.0.0",
-  "description": "Serverless CLI chat and file sharing client powered by Syncplay protocol",
+  "version": "2.1.0",
+  "description": "Terminal chat and file sharing client supporting Syncplay and CFAT Edge Worker (api.cfat.site)",
   "main": "client.js",
   "scripts": {
     "start": "node client.js",
     "client": "node client.js",
     "build:win": "pkg client.js --targets node18-win-x64 --output client-win",
-    "build:linux": "pkg client.js --targets node18-linux-x64 --output client && chmod +x client",
+    "build:linux": "pkg client.js --targets node18-linux-x64 --output client",
     "build": "npm run build:win && npm run build:linux"
   },
   "keywords": [
     "cli",
     "chat",
     "syncplay",
+    "cfat",
     "terminal"
   ],
   "author": "",
-  "license": "ISC"
+  "license": "ISC",
+  "dependencies": {
+    "ws": "^8.18.0"
+  }
 }

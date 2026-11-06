@@ -1,7 +1,10 @@
 /**
- * cli-chat — Serverless Terminal Client (Syncplay Protocol)
- * Real-time terminal chat, room hosting/joining, auto-chunked messaging (>150 chars),
- * and file sharing over Syncplay (syncplay.pl:8995).
+ * cli-chat — Multi-Backend Terminal Client
+ * Real-time terminal chat, room hosting/joining, whisper messaging, and file sharing.
+ *
+ * Supported Backends:
+ *   1. syncplay_server — Serverless Syncplay protocol relay (syncplay.pl:8995)
+ *   2. web_server      — CFAT Edge Worker relay (api.cfat.site / chat.cfat.site)
  *
  * Commands:
  *   /help               — show this list
@@ -23,6 +26,16 @@ const fs       = require("fs");
 const path     = require("path");
 const zlib     = require("zlib");
 const crypto   = require("crypto");
+let WebSocketClient = null;
+try {
+    WebSocketClient = require("ws");
+} catch {
+    try {
+        WebSocketClient = require(path.join(__dirname, "node_modules", "ws"));
+    } catch {
+        WebSocketClient = globalThis.WebSocket || null;
+    }
+}
 
 const STEALTH = process.argv.includes("-s");
 
@@ -30,16 +43,22 @@ const STEALTH = process.argv.includes("-s");
 
 const SYNCPLAY_HOST          = getArgValue("--host") || "syncplay.pl";
 const SYNCPLAY_PORT          = Number(getArgValue("--port")) || 8995;
+const CFAT_WS_URL            = getArgValue("--ws-url") || "wss://api.cfat.site/ws";
+const CFAT_DEFAULT_ROOM      = "6767";
+
 const DEFAULT_MAX_CHAT_LEN   = 150;
-const MAX_USERNAME_LEN       = 16;
+const MAX_USERNAME_LEN       = 24;
 const MAX_ROOM_NAME_LEN      = 35;
 const CHUNK_ENVELOPE_RESERVE = 52;       // reserves space for CC|{"t":"c","m":"xxxx","i":999,"n":999,"d":""}
 const MAX_TEXT_CHUNKS        = 256;      // up to ~25 KB per text message
 const CHUNK_TIMEOUT_MS       = 20_000;   // expire incomplete chunk assemblies
 const CHAT_CHUNK_PACE_MS     = 25;       // pacing between 150-char chat chunks
-const FILE_SLICE_BYTES       = 7200;     // 7200 bytes = 9600 base64 chars (< 10000 Syncplay limit)
-const FILE_CHUNK_PACE_MS     = 45;       // pacing between file chunks
+const SYNCPLAY_FILE_SLICE    = 7200;     // 7200 bytes = 9600 base64 chars (< 10000 Syncplay limit)
+const SYNCPLAY_CHUNK_PACE_MS = 45;       // pacing between Syncplay file chunks
+const WEB_FILE_SLICE         = 24 * 1024;// 24 KB raw payload per chunk for Cloudflare Worker (< 64KB limit)
+const WEB_CHUNK_PACE_MS      = 70;       // ~14 msgs/sec, safe under 75 msgs / 5s rate limit
 const HEARTBEAT_MS           = 1500;     // Syncplay State keepalive interval
+const WEB_PING_INTERVAL_MS   = 25_000;   // Cloudflare Worker keepalive ping
 const CONNECT_TIMEOUT_MS     = 15_000;
 const CONNECT_MAX            = 97;
 const CONNECT_DURATION       = 15_000;
@@ -65,11 +84,19 @@ const c = STEALTH
 
 /* ─── State ─────────────────────────────────────────────────────── */
 
+let serverType       = sanitizeServerType(getArgValue("--server") || getArgValue("-server"));
 let username         = getArgValue("--user") || "";
 let room             = getArgValue("--room") || "";
 let maxChatLength    = DEFAULT_MAX_CHAT_LEN;
+
+// Syncplay socket handles
 let rawSocket        = null;
 let tlsSocket        = null;
+
+// Web socket handles
+let webSocket        = null;
+let webPingTimer     = null;
+
 let connected        = false;
 let quitting         = false;
 let rl               = null;
@@ -83,10 +110,10 @@ let retryCount       = 0;
 let nextMsgCounter   = 0;
 let pendingListPrint = false;
 
-/** Online users in the current Syncplay room */
+/** Online users in the current room */
 const roomUsers = new Set();
 
-/** Pending incoming text/control chunk assemblies: key (sender:msgId) -> { total, received, parts, createdAt } */
+/** Pending incoming text/control chunk assemblies (Syncplay): key (sender:msgId) -> { total, received, parts, createdAt } */
 const pendingTextChunks = new Map();
 const completedTextKeys = new Set();
 
@@ -96,16 +123,20 @@ let outgoingFile = null;
 /** Incoming transfer being reassembled */
 let incomingFile = null;
 
-/** Outgoing chat queue so multi-chunk messages are paced cleanly */
+/** Outgoing chat queue so multi-chunk messages are paced cleanly (Syncplay) */
 const chatSendQueue = [];
 let chatQueueTimer  = null;
 
-/* ─── Boot: ask username, host/join room, then connect ─────────── */
+/* ─── Boot: select backend, ask username, room, then connect ───── */
 
 (async function boot() {
     showHeader();
 
     try {
+        if (!serverType) {
+            serverType = await selectServerMenu();
+        }
+
         if (!username) {
             username = await askQuestion(`${c.bold}Username: ${c.reset}`);
         }
@@ -115,38 +146,59 @@ let chatQueueTimer  = null;
             process.exit(1);
         }
 
-        if (!room) {
-            const mode = await selectRoomAction();
-            if (mode === "host") {
-                const customRoom = await askQuestion(
-                    `${c.bold}Room name to host ${c.gray}(press Enter for random code)${c.reset}${c.bold}: ${c.reset}`
-                );
-                room = sanitizeRoomName(customRoom) || generateRoomCode();
-                console.log(
-                    `${c.gray}Hosting room:${c.reset} ${c.bold}${c.cyan}${room}${c.reset} ` +
-                    `${c.gray}(share this room name with others to join)${c.reset}`
-                );
-            } else {
-                const joinName = await askQuestion(`${c.bold}Enter room name to join: ${c.reset}`);
-                room = sanitizeRoomName(joinName);
-                if (!room) {
-                    console.log(`${c.red}Room name cannot be empty.${c.reset}`);
-                    process.exit(1);
+        if (serverType === "syncplay_server") {
+            if (!room) {
+                const mode = await selectRoomAction();
+                if (mode === "host") {
+                    const customRoom = await askQuestion(
+                        `${c.bold}Room name to host ${c.gray}(press Enter for random code)${c.reset}${c.bold}: ${c.reset}`
+                    );
+                    room = sanitizeRoomName(customRoom) || generateRoomCode();
+                    console.log(
+                        `${c.gray}Hosting room:${c.reset} ${c.bold}${c.cyan}${room}${c.reset} ` +
+                        `${c.gray}(share this room name with others to join)${c.reset}`
+                    );
+                } else {
+                    const joinName = await askQuestion(`${c.bold}Enter room name to join: ${c.reset}`);
+                    room = sanitizeRoomName(joinName);
+                    if (!room) {
+                        console.log(`${c.red}Room name cannot be empty.${c.reset}`);
+                        process.exit(1);
+                    }
+                    console.log(`${c.gray}Joining room:${c.reset} ${c.bold}${c.cyan}${room}${c.reset}`);
                 }
-                console.log(`${c.gray}Joining room:${c.reset} ${c.bold}${c.cyan}${room}${c.reset}`);
+            } else {
+                room = sanitizeRoomName(room);
             }
         } else {
-            room = sanitizeRoomName(room);
+            // web_server (api.cfat.site)
+            if (!room) {
+                room = CFAT_DEFAULT_ROOM; // auto-connects to room 6767
+            } else {
+                room = sanitizeRoomName(room);
+            }
+            console.log(
+                `${c.gray}Web room:${c.reset} ${c.bold}${c.cyan}${room}${c.reset} ` +
+                `${c.gray}(connected to api.cfat.site & chat.cfat.site)${c.reset}`
+            );
         }
     } catch {
         process.exit(1);
     }
 
-    console.log(
-        `${c.gray}Syncplay server:${c.reset} ${c.bold}${SYNCPLAY_HOST}:${SYNCPLAY_PORT}${c.reset} ` +
-        `${c.gray}| User:${c.reset} ${c.bold}${username}${c.reset} ` +
-        `${c.gray}| Room:${c.reset} ${c.bold}${room}${c.reset}`
-    );
+    if (serverType === "syncplay_server") {
+        console.log(
+            `${c.gray}Backend:${c.reset} ${c.bold}syncplay_server${c.reset} ${c.gray}(${SYNCPLAY_HOST}:${SYNCPLAY_PORT})${c.reset} ` +
+            `${c.gray}| User:${c.reset} ${c.bold}${username}${c.reset} ` +
+            `${c.gray}| Room:${c.reset} ${c.bold}${room}${c.reset}`
+        );
+    } else {
+        console.log(
+            `${c.gray}Backend:${c.reset} ${c.bold}web_server${c.reset} ${c.gray}(api.cfat.site / chat.cfat.site)${c.reset} ` +
+            `${c.gray}| User:${c.reset} ${c.bold}${username}${c.reset} ` +
+            `${c.gray}| Room:${c.reset} ${c.bold}${room}${c.reset}`
+        );
+    }
 
     startChat();
 })();
@@ -159,6 +211,14 @@ function getArgValue(flag) {
     return null;
 }
 
+function sanitizeServerType(val) {
+    if (!val) return null;
+    const lower = String(val).toLowerCase().trim();
+    if (lower === "syncplay_server" || lower === "syncplay") return "syncplay_server";
+    if (lower === "web_server" || lower === "web" || lower === "cfat") return "web_server";
+    return null;
+}
+
 function sanitizeUsername(name) {
     return String(name || "").trim().slice(0, MAX_USERNAME_LEN);
 }
@@ -168,14 +228,14 @@ function sanitizeRoomName(name) {
 }
 
 function generateRoomCode() {
-    const num = crypto.randomInt(1000, 9999);
-    return `CLI-${num}`;
+    const num = crypto.randomInt(1000, 10000);
+    return String(num);
 }
 
 function showHeader() {
     if (process.stdout.isTTY) console.clear();
     console.log(
-        `\n${c.bold}${c.cyan}  cli-chat${c.reset}  ${c.gray}syncplay terminal messenger${c.reset}\n` +
+        `\n${c.bold}${c.cyan}  cli-chat${c.reset}  ${c.gray}terminal messenger (Syncplay & CFAT Edge)${c.reset}\n` +
         `${c.gray}  Type /help for available commands${c.reset}\n`
     );
 }
@@ -193,7 +253,92 @@ function askQuestion(query) {
     });
 }
 
-/* ─── Host / Join Room Selector ────────────────────────────────── */
+/* ─── Server / Backend Selection Menu ─────────────────────────── */
+
+function selectServerMenu() {
+    if (!process.stdin.isTTY) {
+        return Promise.resolve("syncplay_server");
+    }
+
+    return new Promise((resolve, reject) => {
+        const options = [
+            {
+                id: "syncplay_server",
+                label: "syncplay_server",
+                desc: "Syncplay protocol relay (syncplay.pl:8995)"
+            },
+            {
+                id: "web_server",
+                label: "web_server",
+                desc: "CFAT Edge Worker relay (api.cfat.site -> auto room 6767)"
+            }
+        ];
+        let index = 0;
+
+        const renderMenu = () => {
+            console.clear();
+            console.log(
+                `\n${c.bold}${c.cyan}  cli-chat${c.reset}  ${c.gray}terminal messenger${c.reset}\n` +
+                `${c.gray}  Select connection backend with arrow keys and press Enter${c.reset}\n`
+            );
+
+            options.forEach((opt, i) => {
+                const pointer = i === index ? `${c.green}❯${c.reset}` : " ";
+                const title   = i === index ? `${c.bold}${c.green}${opt.label}${c.reset}` : opt.label;
+                console.log(` ${pointer} ${title} ${c.gray}— ${opt.desc}${c.reset}`);
+            });
+            console.log("");
+        };
+
+        const cleanup = () => {
+            process.stdin.off("keypress", onKeypress);
+            if (process.stdin.isTTY) {
+                process.stdin.setRawMode(false);
+            }
+            process.stdin.pause();
+        };
+
+        const onKeypress = (_, key) => {
+            if (!key) return;
+
+            if (key.ctrl && key.name === "c") {
+                cleanup();
+                reject(new Error("cancelled"));
+                return;
+            }
+
+            if (key.name === "up" || key.name === "k") {
+                index = (index - 1 + options.length) % options.length;
+                renderMenu();
+                return;
+            }
+
+            if (key.name === "down" || key.name === "j") {
+                index = (index + 1) % options.length;
+                renderMenu();
+                return;
+            }
+
+            if (key.name === "return" || key.name === "enter") {
+                const choice = options[index].id;
+                cleanup();
+                console.clear();
+                showHeader();
+                resolve(choice);
+            }
+        };
+
+        readline.emitKeypressEvents(process.stdin);
+        if (process.stdin.isTTY) {
+            process.stdin.setRawMode(true);
+        }
+        process.stdin.resume();
+        process.stdin.on("keypress", onKeypress);
+        renderMenu();
+    });
+}
+
+/* ─── Host / Join Room Selector (Syncplay) ─────────────────────── */
 
 function selectRoomAction() {
     if (!process.stdin.isTTY) {
@@ -271,7 +416,7 @@ function selectRoomAction() {
     });
 }
 
-/* ─── Chat readline + Syncplay Connection ──────────────────────── */
+/* ─── Chat Readline Lifecycle ──────────────────────────────────── */
 
 function startChat() {
     rl = readline.createInterface({
@@ -302,11 +447,360 @@ function promptInput(preserveCursor = false) {
     rl.prompt(preserveCursor);
 }
 
+/* ─── Connection Dispatcher ────────────────────────────────────── */
+
 function connect(isReconnect = false) {
     if (quitting) return;
     cleanupConnection();
 
+    if (serverType === "web_server") {
+        connectWeb(isReconnect);
+    } else {
+        connectSyncplay(isReconnect);
+    }
+}
+
+/* ─── Web Server Connection (Cloudflare Worker api.cfat.site) ──── */
+
+function connectWeb(isReconnect = false) {
+    if (!WebSocketClient) {
+        print(`${c.red}[Error] WebSocket client module not available. Run: npm install ws${c.reset}`);
+        return;
+    }
+
     const attempt = {
+        backend: "web_server",
+        completed: false,
+        failed: false,
+        reconnect: isReconnect,
+        timeoutTimer: null,
+    };
+    connectionAttempt = attempt;
+
+    if (!isReconnect) {
+        startProgressBar();
+    }
+
+    attempt.timeoutTimer = setTimeout(() => {
+        if (connectionAttempt !== attempt || attempt.completed || attempt.failed) return;
+        handleConnectionDrop(attempt, "Connection to api.cfat.site timed out");
+    }, CONNECT_TIMEOUT_MS);
+
+    const wsUrl = `${CFAT_WS_URL}?room=${encodeURIComponent(room)}&user=${encodeURIComponent(username)}&game=chat`;
+
+    try {
+        const ws = new WebSocketClient(wsUrl);
+        webSocket = ws;
+
+        const onOpen = () => {
+            if (connectionAttempt !== attempt || attempt.failed || quitting) return;
+            if (attempt.timeoutTimer) {
+                clearTimeout(attempt.timeoutTimer);
+                attempt.timeoutTimer = null;
+            }
+            attempt.completed = true;
+            connected = true;
+            retryCount = 0;
+
+            roomUsers.clear();
+            roomUsers.add(username);
+            updatePrompt();
+
+            if (!attempt.reconnect) {
+                finishProgressBar();
+            }
+
+            print(
+                `${c.gray}[System] Connected to api.cfat.site | ` +
+                `Room: ${c.bold}${room}${c.reset}${c.gray} | ` +
+                `User: ${c.bold}${username}${c.reset}${c.gray} | ` +
+                `Type /help for commands.${c.reset}`
+            );
+
+            // Periodic ping to keep Cloudflare Worker edge WebSocket open indefinitely
+            if (webPingTimer) clearInterval(webPingTimer);
+            webPingTimer = setInterval(() => {
+                if (connected && webSocket && webSocket.readyState === 1) {
+                    try {
+                        webSocket.send(JSON.stringify({ type: "ping" }));
+                    } catch (_) {}
+                }
+            }, WEB_PING_INTERVAL_MS);
+        };
+
+        const onMessage = (data) => {
+            if (connectionAttempt !== attempt) return;
+            handleWebFrame(attempt, data);
+        };
+
+        const onClose = (code, reason) => {
+            if (connectionAttempt !== attempt) return;
+            const rStr = reason ? ` (${reason})` : "";
+            handleConnectionDrop(attempt, `Disconnected from api.cfat.site${rStr}`);
+        };
+
+        const onError = (errMsg) => {
+            if (connectionAttempt !== attempt) return;
+            handleConnectionDrop(attempt, errMsg || "WebSocket connection error");
+        };
+
+        if (typeof ws.on === "function") {
+            ws.on("open", onOpen);
+            ws.on("message", onMessage);
+            ws.on("close", (code, reason) => onClose(code, reason ? reason.toString() : ""));
+            ws.on("error", (err) => onError(err?.message));
+        } else {
+            ws.addEventListener("open", onOpen);
+            ws.addEventListener("message", (ev) => onMessage(ev.data));
+            ws.addEventListener("close", (ev) => onClose(ev.code, ev.reason));
+            ws.addEventListener("error", (ev) => onError(ev.message));
+        }
+    } catch (err) {
+        handleConnectionDrop(attempt, err?.message || "Failed to initialize WebSocket");
+    }
+}
+
+function handleWebFrame(attempt, raw) {
+    let msg;
+    try {
+        msg = JSON.parse(raw.toString("utf8"));
+    } catch {
+        return;
+    }
+
+    if (!msg || typeof msg !== "object") return;
+
+    // 1. Room State (initial snapshot upon joining)
+    if (msg.type === "room_state") {
+        roomUsers.clear();
+        roomUsers.add(username);
+        if (Array.isArray(msg.users)) {
+            for (const u of msg.users) {
+                const clean = String(u || "").trim();
+                if (clean) roomUsers.add(clean);
+            }
+        }
+        if (pendingListPrint) {
+            pendingListPrint = false;
+            printUserList();
+        }
+        return;
+    }
+
+    // 2. User Joined notification
+    if (msg.type === "user_joined") {
+        const joinedUser = String(msg.user || "").trim();
+        if (joinedUser) {
+            roomUsers.add(joinedUser);
+            if (joinedUser !== username) {
+                print(`${c.gray}[System] ${joinedUser} joined the room${c.reset}`);
+            }
+        }
+        if (Array.isArray(msg.users)) {
+            for (const u of msg.users) {
+                const clean = String(u || "").trim();
+                if (clean) roomUsers.add(clean);
+            }
+        }
+        return;
+    }
+
+    // 3. User Left notification
+    if (msg.type === "user_left") {
+        const leftUser = String(msg.user || "").trim();
+        if (leftUser) {
+            roomUsers.delete(leftUser);
+            cleanupUserTransfers(leftUser);
+            if (leftUser !== username) {
+                print(`${c.gray}[System] ${leftUser} left the room${c.reset}`);
+            }
+        }
+        if (Array.isArray(msg.users)) {
+            roomUsers.clear();
+            roomUsers.add(username);
+            for (const u of msg.users) {
+                const clean = String(u || "").trim();
+                if (clean) roomUsers.add(clean);
+            }
+        }
+        return;
+    }
+
+    // 4. Standard Chat Message (interoperable with chat.cfat.site & other CLI clients)
+    if (msg.type === "chat") {
+        const sender = String(msg.user || "").trim();
+        const text   = String(msg.message || "");
+        if (!sender || sender === username) return; // ignore our own echo
+        roomUsers.add(sender);
+        print(`${c.bold}${c.blue}${sender}${c.reset}: ${text}`);
+        return;
+    }
+
+    // 5. Pong Keepalive response
+    if (msg.type === "pong") {
+        return;
+    }
+
+    // 6. Action: Whispers and File Transfers
+    if (msg.type === "action" || msg.type === "game") {
+        handleWebActionPayload(msg);
+        return;
+    }
+
+    // 7. System Notice / Error
+    if (msg.type === "system_notice") {
+        print(`${c.yellow}[System] ${msg.message}${c.reset}`);
+        return;
+    }
+
+    if (msg.type === "error") {
+        print(`${c.red}[Error] ${msg.error || msg.message || "Server error"}${c.reset}`);
+        return;
+    }
+}
+
+function handleWebActionPayload(msg) {
+    const sender = String(msg.fromUser || msg.user || "").trim();
+    const action = String(msg.action || "");
+
+    switch (action) {
+        case "whisper": {
+            if (sender && msg.message) {
+                print(`${c.magenta}[PM from ${sender}]${c.reset} ${msg.message}`);
+            }
+            break;
+        }
+
+        case "file_offer": {
+            const filename   = String(msg.filename || "file").replace(/[/\\]/g, "_");
+            const size       = Number(msg.size) || 0;
+            const id         = String(msg.id || "");
+            const compressed = Boolean(msg.compressed);
+            const chunks     = Number(msg.totalChunks) || 0;
+
+            if (!id || !sender || sender === username) break;
+
+            rl.question(
+                `\n${c.yellow}${sender} wants to send ${c.bold}${filename}${c.reset}${c.yellow} ` +
+                `(file, ${humanSize(size)}). Accept? [y/N]: ${c.reset}`,
+                (answer) => {
+                    if (answer.trim().toLowerCase() === "y") {
+                        incomingFile = {
+                            backend: "web",
+                            from: sender,
+                            id,
+                            filename,
+                            size,
+                            compressed,
+                            totalChunks: chunks,
+                            chunks: new Array(Math.max(1, chunks)).fill(null),
+                            receivedChunks: 0,
+                            receivedEncodedBytes: 0,
+                        };
+                        sendWebAction({ action: "file_accept", to: sender, id });
+                        print(`${c.gray}Receiving file ${filename}…${c.reset}`);
+                        if (size === 0 && chunks === 0) {
+                            finalizeIncomingFile();
+                        }
+                    } else {
+                        sendWebAction({ action: "file_reject", to: sender, id });
+                        promptInput();
+                    }
+                }
+            );
+            break;
+        }
+
+        case "file_accept": {
+            if (!outgoingFile || outgoingFile.id !== msg.id) break;
+            if (outgoingFile.acceptedBy) {
+                sendWebAction({
+                    action: "file_reject",
+                    to: sender,
+                    id: msg.id,
+                    reason: "Transfer already accepted by another user",
+                });
+                break;
+            }
+            outgoingFile.acceptedBy = sender;
+            print(`${c.green}${sender} accepted the file. Sending…${c.reset}`);
+            transmitWebFile(outgoingFile, sender);
+            break;
+        }
+
+        case "file_reject": {
+            if (!outgoingFile || outgoingFile.id !== msg.id) break;
+            if (!outgoingFile.acceptedBy) {
+                print(`${c.yellow}${sender} declined the file.${c.reset}`);
+                outgoingFile = null;
+            }
+            break;
+        }
+
+        case "file_chunk": {
+            if (!incomingFile || incomingFile.id !== msg.id || incomingFile.from !== sender) break;
+            const idx   = Number(msg.i);
+            const total = Number(msg.n);
+            const b64   = String(msg.d || "");
+
+            if (!Number.isInteger(idx) || idx < 0 || idx >= total || !b64) break;
+
+            if (incomingFile.chunks[idx] !== null) break; // duplicate chunk
+
+            const chunkBuf = Buffer.from(b64, "base64");
+            incomingFile.chunks[idx] = chunkBuf;
+            incomingFile.receivedChunks++;
+            incomingFile.receivedEncodedBytes += chunkBuf.length;
+
+            const approxRawReceived = Math.min(
+                incomingFile.size,
+                Math.round((incomingFile.receivedChunks / incomingFile.totalChunks) * incomingFile.size)
+            );
+            drawProgress("Receiving", approxRawReceived, incomingFile.size);
+
+            if (incomingFile.receivedChunks >= incomingFile.totalChunks) {
+                finalizeIncomingFile();
+            }
+            break;
+        }
+
+        case "file_done": {
+            if (!incomingFile || incomingFile.id !== msg.id || incomingFile.from !== sender) break;
+            if (incomingFile.receivedChunks >= incomingFile.totalChunks) {
+                finalizeIncomingFile();
+            }
+            break;
+        }
+
+        case "file_cancel": {
+            if (incomingFile && incomingFile.from === sender && (!msg.id || incomingFile.id === msg.id)) {
+                clearProgress();
+                print(`${c.red}Transfer cancelled by ${sender}.${c.reset}`);
+                incomingFile = null;
+            }
+            break;
+        }
+    }
+}
+
+function sendWebAction(payloadObj) {
+    if (!webSocket || webSocket.readyState !== 1) return false;
+    try {
+        webSocket.send(JSON.stringify({
+            type: "action",
+            ...payloadObj,
+        }));
+        return true;
+    } catch {
+        return false;
+    }
+}
+
+/* ─── Syncplay Connection (TCP + StartTLS) ──────────────────────── */
+
+function connectSyncplay(isReconnect = false) {
+    const attempt = {
+        backend: "syncplay_server",
         completed: false,
         failed: false,
         reconnect: isReconnect,
@@ -321,7 +815,7 @@ function connect(isReconnect = false) {
 
     attempt.timeoutTimer = setTimeout(() => {
         if (connectionAttempt !== attempt || attempt.completed || attempt.failed) return;
-        handleConnectionDrop(attempt, "Connection timed out");
+        handleConnectionDrop(attempt, "Connection to syncplay.pl timed out");
     }, CONNECT_TIMEOUT_MS);
 
     const sock = net.createConnection({ host: SYNCPLAY_HOST, port: SYNCPLAY_PORT });
@@ -448,95 +942,6 @@ function upgradeToTls(attempt, sock, initialBuffer) {
     });
 }
 
-function handleConnectionDrop(attempt, reason) {
-    if (quitting || connectionAttempt !== attempt || attempt.failed) return;
-    attempt.failed = true;
-    const wasConnected = connected;
-    cleanupConnection();
-
-    if (wasConnected) {
-        clearProgress();
-        print(`${c.yellow}[System] Disconnected (${reason}). Reconnecting…${c.reset}`);
-    } else if (retryCount === 0) {
-        stopProgressBar();
-        clearProgress();
-        print(`${c.yellow}[System] Connection issue (${reason}). Retrying…${c.reset}`);
-    }
-
-    const delay = Math.min(15_000, 1500 * Math.pow(1.5, Math.min(retryCount, 6)));
-    retryCount++;
-    reconnectTimer = setTimeout(() => {
-        reconnectTimer = null;
-        if (!quitting) connect(true);
-    }, delay);
-}
-
-function cleanupConnection() {
-    if (reconnectTimer) {
-        clearTimeout(reconnectTimer);
-        reconnectTimer = null;
-    }
-    if (heartbeatTimer) {
-        clearInterval(heartbeatTimer);
-        heartbeatTimer = null;
-    }
-    if (chatQueueTimer) {
-        clearTimeout(chatQueueTimer);
-        chatQueueTimer = null;
-    }
-    chatSendQueue.length = 0;
-
-    if (connectionAttempt?.timeoutTimer) {
-        clearTimeout(connectionAttempt.timeoutTimer);
-        connectionAttempt.timeoutTimer = null;
-    }
-
-    connected = false;
-
-    if (tlsSocket) {
-        tlsSocket.removeAllListeners();
-        try { tlsSocket.destroy(); } catch {}
-        tlsSocket = null;
-    }
-    if (rawSocket) {
-        rawSocket.removeAllListeners();
-        try { rawSocket.destroy(); } catch {}
-        rawSocket = null;
-    }
-}
-
-/* ─── Syncplay Frame Router ────────────────────────────────────── */
-
-function sendRawJson(obj) {
-    if (!tlsSocket || tlsSocket.destroyed) return false;
-    try {
-        tlsSocket.write(JSON.stringify(obj) + "\r\n");
-        return true;
-    } catch {
-        return false;
-    }
-}
-
-function sendStateHeartbeat(latencyCalc = null) {
-    const ping = {
-        clientLatencyCalculation: Date.now() / 1000,
-        clientRtt: 0.0,
-    };
-    if (latencyCalc) {
-        ping.latencyCalculation = latencyCalc;
-    }
-    sendRawJson({
-        State: {
-            ping,
-            playstate: {
-                position: 0.0,
-                paused: true,
-                doSeek: false,
-            },
-        },
-    });
-}
-
 function handleSyncplayFrame(attempt, root) {
     // 1. Hello handshake response
     if (root.Hello && typeof root.Hello === "object") {
@@ -652,7 +1057,7 @@ function handleSyncplayFrame(attempt, root) {
             const pc = setObj.playlistChange;
             if (pc.user && pc.user !== username && Array.isArray(pc.files) && pc.files.length === 2) {
                 if (typeof pc.files[0] === "string" && pc.files[0].startsWith("CCFILE|")) {
-                    handleIncomingFileChunk(pc.user, pc.files[0], pc.files[1]);
+                    handleIncomingSyncplayFileChunk(pc.user, pc.files[0], pc.files[1]);
                 }
             }
         }
@@ -666,7 +1071,7 @@ function handleSyncplayFrame(attempt, root) {
         if (!sender) return;
         roomUsers.add(sender);
         if (sender === username) return; // ignore our own echo
-        handleIncomingChat(sender, message);
+        handleIncomingSyncplayChat(sender, message);
         return;
     }
 
@@ -677,7 +1082,35 @@ function handleSyncplayFrame(attempt, root) {
     }
 }
 
-/* ─── 150-Char Message Transfer & Auto-Chunking System ─────────── */
+function sendRawJson(obj) {
+    if (!tlsSocket || tlsSocket.destroyed) return false;
+    try {
+        tlsSocket.write(JSON.stringify(obj) + "\r\n");
+        return true;
+    } catch {
+        return false;
+    }
+}
+
+function sendStateHeartbeat(latencyCalc = null) {
+    const ping = {
+        clientLatencyCalculation: Date.now() / 1000,
+        clientRtt: 0.0,
+    };
+    if (latencyCalc) {
+        ping.latencyCalculation = latencyCalc;
+    }
+    sendRawJson({
+        State: {
+            ping,
+            playstate: {
+                position: 0.0,
+                paused: true,
+                doSeek: false,
+            },
+        },
+    });
+}
 
 function queueRawChat(chatStr) {
     chatSendQueue.push(chatStr);
@@ -698,10 +1131,6 @@ function processChatQueue() {
     }
 }
 
-/**
- * Sends a structured cli-chat protocol object over Syncplay's 150-char Chat channel.
- * Automatically splits payloads > maxChatLength (150 chars) into base64 chunk frames.
- */
 function sendProtocolMessage(payloadObj) {
     if (!connected) {
         print(`${c.red}[Error] Not connected to Syncplay server.${c.reset}`);
@@ -734,12 +1163,7 @@ function sendProtocolMessage(payloadObj) {
     return true;
 }
 
-/**
- * Sends a public chat message.
- * Short messages (<= 150 chars) are sent directly as native Syncplay Chat;
- * longer messages (> 150 chars) are automatically chunked via CC| envelopes.
- */
-function sendUserChatMessage(text) {
+function sendSyncplayUserChatMessage(text) {
     if (!connected) {
         print(`${c.red}[Error] Not connected to Syncplay server.${c.reset}`);
         return;
@@ -757,7 +1181,7 @@ function sendUserChatMessage(text) {
     sendProtocolMessage({ t: "m", c: text });
 }
 
-function handleIncomingChat(sender, msg) {
+function handleIncomingSyncplayChat(sender, msg) {
     if (!msg.startsWith("CC|")) {
         print(`${c.bold}${c.blue}${sender}${c.reset}: ${msg}`);
         return;
@@ -777,7 +1201,7 @@ function handleIncomingChat(sender, msg) {
         return;
     }
 
-    handleProtocolPayload(sender, obj);
+    handleSyncplayProtocolPayload(sender, obj);
 }
 
 function handleIncomingTextChunk(sender, chunkObj) {
@@ -839,7 +1263,7 @@ function handleIncomingTextChunk(sender, chunkObj) {
     }
 
     if (decodedObj && typeof decodedObj === "object" && decodedObj.t !== "c") {
-        handleProtocolPayload(sender, decodedObj);
+        handleSyncplayProtocolPayload(sender, decodedObj);
     }
 }
 
@@ -852,7 +1276,7 @@ function pruneExpiredTextChunks() {
     }
 }
 
-function handleProtocolPayload(sender, msg) {
+function handleSyncplayProtocolPayload(sender, msg) {
     switch (msg.t) {
         case "m":
             if (typeof msg.c === "string") {
@@ -881,6 +1305,7 @@ function handleProtocolPayload(sender, msg) {
                 (answer) => {
                     if (answer.trim().toLowerCase() === "y") {
                         incomingFile = {
+                            backend: "syncplay",
                             from: sender,
                             id,
                             filename,
@@ -918,7 +1343,7 @@ function handleProtocolPayload(sender, msg) {
             }
             outgoingFile.acceptedBy = sender;
             print(`${c.green}${sender} accepted the file. Sending…${c.reset}`);
-            transmitFile(outgoingFile, sender);
+            transmitSyncplayFile(outgoingFile, sender);
             break;
         }
 
@@ -961,6 +1386,74 @@ function handleProtocolPayload(sender, msg) {
     }
 }
 
+/* ─── Unified Connection Cleanup & Reconnect ───────────────────── */
+
+function handleConnectionDrop(attempt, reason) {
+    if (quitting || connectionAttempt !== attempt || attempt.failed) return;
+    attempt.failed = true;
+    const wasConnected = connected;
+    cleanupConnection();
+
+    if (wasConnected) {
+        clearProgress();
+        print(`${c.yellow}[System] Disconnected (${reason}). Reconnecting…${c.reset}`);
+    } else if (retryCount === 0) {
+        stopProgressBar();
+        clearProgress();
+        print(`${c.yellow}[System] Connection issue (${reason}). Retrying…${c.reset}`);
+    }
+
+    const delay = Math.min(15_000, 1500 * Math.pow(1.5, Math.min(retryCount, 6)));
+    retryCount++;
+    reconnectTimer = setTimeout(() => {
+        reconnectTimer = null;
+        if (!quitting) connect(true);
+    }, delay);
+}
+
+function cleanupConnection() {
+    if (reconnectTimer) {
+        clearTimeout(reconnectTimer);
+        reconnectTimer = null;
+    }
+    if (heartbeatTimer) {
+        clearInterval(heartbeatTimer);
+        heartbeatTimer = null;
+    }
+    if (webPingTimer) {
+        clearInterval(webPingTimer);
+        webPingTimer = null;
+    }
+    if (chatQueueTimer) {
+        clearTimeout(chatQueueTimer);
+        chatQueueTimer = null;
+    }
+    chatSendQueue.length = 0;
+
+    if (connectionAttempt?.timeoutTimer) {
+        clearTimeout(connectionAttempt.timeoutTimer);
+        connectionAttempt.timeoutTimer = null;
+    }
+
+    connected = false;
+
+    if (tlsSocket) {
+        tlsSocket.removeAllListeners();
+        try { tlsSocket.destroy(); } catch {}
+        tlsSocket = null;
+    }
+    if (rawSocket) {
+        rawSocket.removeAllListeners();
+        try { rawSocket.destroy(); } catch {}
+        rawSocket = null;
+    }
+    if (webSocket) {
+        webSocket.removeAllListeners();
+        try { webSocket.close(); } catch {}
+        webSocket = null;
+    }
+}
+
 /* ─── Input Handler ─────────────────────────────────────────────── */
 
 function handleInput(line) {
@@ -973,7 +1466,11 @@ function handleInput(line) {
     if (input === "/quit" || input === "/exit") {
         quitting = true;
         if (outgoingFile?.acceptedBy) {
-            sendProtocolMessage({ t: "fc", id: outgoingFile.id });
+            if (serverType === "web_server") {
+                sendWebAction({ action: "file_cancel", to: outgoingFile.acceptedBy, id: outgoingFile.id });
+            } else {
+                sendProtocolMessage({ t: "fc", id: outgoingFile.id });
+            }
         }
         print(`${c.gray}Goodbye.${c.reset}`);
         cleanupConnection();
@@ -1000,8 +1497,15 @@ function handleInput(line) {
             print(`${c.red}[Error] Not connected.${c.reset}`);
             return;
         }
-        pendingListPrint = true;
-        sendRawJson({ List: null });
+        if (serverType === "web_server") {
+            printUserList();
+            if (webSocket && webSocket.readyState === 1) {
+                try { webSocket.send(JSON.stringify({ type: "get_room_state" })); } catch (_) {}
+            }
+        } else {
+            pendingListPrint = true;
+            sendRawJson({ List: null });
+        }
         return;
     }
 
@@ -1018,9 +1522,15 @@ function handleInput(line) {
         room = targetRoom;
         roomUsers.clear();
         roomUsers.add(username);
-        sendRawJson({ Set: { room: { name: room } } });
-        sendRawJson({ List: null });
-        print(`${c.gray}[System] Switched to room:${c.reset} ${c.bold}${c.cyan}${room}${c.reset}`);
+
+        if (serverType === "web_server") {
+            print(`${c.gray}[System] Switching to room:${c.reset} ${c.bold}${c.cyan}${room}${c.reset}…`);
+            connect(false);
+        } else {
+            sendRawJson({ Set: { room: { name: room } } });
+            sendRawJson({ List: null });
+            print(`${c.gray}[System] Switched to room:${c.reset} ${c.bold}${c.cyan}${room}${c.reset}`);
+        }
         return;
     }
 
@@ -1048,8 +1558,14 @@ function handleInput(line) {
             print(`${c.red}Usage: /w <username> <message>${c.reset}`);
             return;
         }
-        if (sendProtocolMessage({ t: "w", to, c: content })) {
-            print(`${c.gray}[PM → ${to}] ${content}${c.reset}`);
+        if (serverType === "web_server") {
+            if (sendWebAction({ action: "whisper", to, message: content })) {
+                print(`${c.gray}[PM → ${to}] ${content}${c.reset}`);
+            }
+        } else {
+            if (sendProtocolMessage({ t: "w", to, c: content })) {
+                print(`${c.gray}[PM → ${to}] ${content}${c.reset}`);
+            }
         }
         return;
     }
@@ -1059,15 +1575,24 @@ function handleInput(line) {
         return;
     }
 
-    sendUserChatMessage(input);
+    if (serverType === "web_server") {
+        if (!connected || !webSocket || webSocket.readyState !== 1) {
+            print(`${c.red}[Error] Not connected to api.cfat.site.${c.reset}`);
+            return;
+        }
+        webSocket.send(JSON.stringify({ type: "chat", text: input }));
+        print(`${c.bold}${c.green}${username}${c.reset}: ${input}`);
+    } else {
+        sendSyncplayUserChatMessage(input);
+    }
     promptInput();
 }
 
-/* ─── File Sharing (Over Syncplay Protocol) ────────────────────── */
+/* ─── File Sharing Dispatcher ──────────────────────────────────── */
 
 function sendFile(filepath) {
     if (!connected) {
-        print(`${c.red}[Error] Not connected to Syncplay server.${c.reset}`);
+        print(`${c.red}[Error] Not connected to server.${c.reset}`);
         return;
     }
 
@@ -1088,6 +1613,16 @@ function sendFile(filepath) {
         return;
     }
 
+    if (serverType === "web_server") {
+        sendWebFile(filepath, stat);
+    } else {
+        sendSyncplayFile(filepath, stat);
+    }
+}
+
+/* ─── Web Server File Sharing (Cloudflare Worker) ───────────────── */
+
+function sendWebFile(filepath, stat) {
     try {
         const filename = path.basename(filepath);
         const rawBuffer = fs.readFileSync(filepath);
@@ -1095,11 +1630,101 @@ function sendFile(filepath) {
         const useCompressed = deflated.length < rawBuffer.length;
         const payloadBuffer = useCompressed ? deflated : rawBuffer;
         const totalChunks = payloadBuffer.length > 0
-            ? Math.ceil(payloadBuffer.length / FILE_SLICE_BYTES)
+            ? Math.ceil(payloadBuffer.length / WEB_FILE_SLICE)
             : 0;
         const transferId = crypto.randomBytes(4).toString("hex");
 
         outgoingFile = {
+            backend: "web",
+            id: transferId,
+            filename,
+            size: stat.size,
+            payloadBuffer,
+            compressed: useCompressed,
+            totalChunks,
+            acceptedBy: null,
+            timer: null,
+        };
+
+        sendWebAction({
+            action: "file_offer",
+            id: transferId,
+            filename,
+            size: stat.size,
+            compressed: useCompressed ? 1 : 0,
+            totalChunks,
+        });
+
+        print(`${c.gray}Offered file ${filename} (${humanSize(stat.size)}) — waiting for acceptance…${c.reset}`);
+    } catch (err) {
+        print(`${c.red}Failed to prepare file transfer: ${err.message}${c.reset}`);
+    }
+}
+
+function transmitWebFile(transfer, recipient) {
+    const payload = transfer.payloadBuffer;
+    const totalChunks = transfer.totalChunks;
+    let chunkIndex = 0;
+
+    if (totalChunks === 0) {
+        sendWebAction({ action: "file_done", to: recipient, id: transfer.id });
+        print(`${c.green}✓ File sent: ${transfer.filename}${c.reset}`);
+        outgoingFile = null;
+        return;
+    }
+
+    function sendNextChunk() {
+        if (!connected || outgoingFile !== transfer) return;
+
+        if (chunkIndex >= totalChunks) {
+            clearProgress();
+            sendWebAction({ action: "file_done", to: recipient, id: transfer.id });
+            print(`${c.green}✓ File sent: ${transfer.filename}${c.reset}`);
+            outgoingFile = null;
+            return;
+        }
+
+        const start = chunkIndex * WEB_FILE_SLICE;
+        const slice = payload.subarray(start, start + WEB_FILE_SLICE);
+
+        sendWebAction({
+            action: "file_chunk",
+            to: recipient,
+            id: transfer.id,
+            i: chunkIndex,
+            n: totalChunks,
+            d: slice.toString("base64"),
+        });
+
+        chunkIndex++;
+        const approxRawSent = Math.min(
+            transfer.size,
+            Math.round((chunkIndex / totalChunks) * transfer.size)
+        );
+        drawProgress("Sending", approxRawSent, transfer.size);
+
+        transfer.timer = setTimeout(sendNextChunk, WEB_CHUNK_PACE_MS);
+    }
+
+    sendNextChunk();
+}
+
+/* ─── Syncplay File Sharing (Over Set.playlistChange) ───────────── */
+
+function sendSyncplayFile(filepath, stat) {
+    try {
+        const filename = path.basename(filepath);
+        const rawBuffer = fs.readFileSync(filepath);
+        const deflated = zlib.deflateRawSync(rawBuffer);
+        const useCompressed = deflated.length < rawBuffer.length;
+        const payloadBuffer = useCompressed ? deflated : rawBuffer;
+        const totalChunks = payloadBuffer.length > 0
+            ? Math.ceil(payloadBuffer.length / SYNCPLAY_FILE_SLICE)
+            : 0;
+        const transferId = crypto.randomBytes(4).toString("hex");
+
+        outgoingFile = {
+            backend: "syncplay",
             id: transferId,
             filename,
             size: stat.size,
@@ -1125,7 +1750,7 @@ function sendFile(filepath) {
     }
 }
 
-function transmitFile(transfer, recipient) {
+function transmitSyncplayFile(transfer, recipient) {
     const payload = transfer.payloadBuffer;
     const totalChunks = transfer.totalChunks;
     let chunkIndex = 0;
@@ -1150,8 +1775,8 @@ function transmitFile(transfer, recipient) {
             return;
         }
 
-        const start = chunkIndex * FILE_SLICE_BYTES;
-        const slice = payload.subarray(start, start + FILE_SLICE_BYTES);
+        const start = chunkIndex * SYNCPLAY_FILE_SLICE;
+        const slice = payload.subarray(start, start + SYNCPLAY_FILE_SLICE);
         const header = `CCFILE|${JSON.stringify({
             id: transfer.id,
             to: recipient,
@@ -1174,13 +1799,13 @@ function transmitFile(transfer, recipient) {
         );
         drawProgress("Sending", approxRawSent, transfer.size);
 
-        transfer.timer = setTimeout(sendNextChunk, FILE_CHUNK_PACE_MS);
+        transfer.timer = setTimeout(sendNextChunk, SYNCPLAY_CHUNK_PACE_MS);
     }
 
     sendNextChunk();
 }
 
-function handleIncomingFileChunk(sender, headerStr, base64Data) {
+function handleIncomingSyncplayFileChunk(sender, headerStr, base64Data) {
     if (!incomingFile || incomingFile.from !== sender) return;
 
     let meta;
@@ -1265,7 +1890,7 @@ function cleanupUserTransfers(peerName) {
     }
 }
 
-/* ─── Progress bar ──────────────────────────────────────────────── */
+/* ─── Progress Bar ──────────────────────────────────────────────── */
 
 function drawProgress(label, done, total) {
     const pct    = total > 0 ? Math.min(1, done / total) : 1;

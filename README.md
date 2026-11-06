@@ -4,41 +4,51 @@
 tinyurl.com/cli-chat0
 ```
 
-A **serverless terminal-based real-time chat and file sharing tool** designed for developer teams and university lab environments.
+A **terminal-based real-time chat and file sharing tool** designed for developer teams, university lab environments, and cross-platform terminal-to-web communication.
 
-The application runs entirely in the **command line** and uses the **Syncplay protocol (`syncplay.pl:8995`)** with StartTLS encryption to exchange messages and files in shared rooms—requiring **zero backend server hosting**.
+The application runs in the **command line** (or as standalone Windows/Linux executables) and offers **two real-time backends**:
+1. **`syncplay_server`**: Connects via the Syncplay protocol (`syncplay.pl:8995`) with StartTLS encryption.
+2. **`web_server`**: Connects via the CFAT Cloudflare Edge Worker (`api.cfat.site`) with WebSockets, enabling seamless communication between CLI terminals and web browser users on **`chat.cfat.site`**.
 
 ---
 
 ## Features
 
-- **Serverless Syncplay Backend**: Connects directly to `syncplay.pl:8995` over TLS (`StartTLS`). No local or hosted WebSocket server required.
-- **Host or Join Rooms**: Create a room (with a custom name or auto-generated room code) or join an existing room.
-- **Auto-Chunked Messaging (>150 chars)**: Automatically splits and reassembles messages and whispers that exceed Syncplay's 150-character chat limit.
-- **File Sharing (`/send`)**: Compresses and transfers files directly over the Syncplay room channel.
-- **Stealth Mode (`-s`)**: Run `node client.js -s` to disable all terminal colors.
+- **Dual Backend Selection**:
+  - **`syncplay_server`**: Zero server hosting, 150-char auto-chunking, and room hosting/joining.
+  - **`web_server`**: Cloudflare Edge Worker (`api.cfat.site`), auto-connects to room **`6767`**, interoperable with web users on `chat.cfat.site`.
+- **Cross-Platform File Sharing (`/send`)**: Deflate compression, chunking, recipient acceptance prompts, and real-time progress bars in both Syncplay and Web Server modes.
+- **Private Whispers (`/w <user> <msg>`)**: Direct 1-to-1 targeted messaging.
+- **Dynamic Rooms (`/room [name]`)**: View your active room or switch rooms on the fly.
+- **Stealth Mode (`-s`)**: Run with `-s` to disable all terminal colors.
 
 ---
 
 ## Setup and Run
 
-Requires Node.js (zero external runtime npm dependencies).
+### Running with Node.js
 
 ```powershell
-# Launch the chat client
 npm start
 # or
 npm run client
 ```
 
-1. Enter your **Username** (up to 16 characters).
-2. Choose **Host a room** (enter a room name or press Enter to generate a random room code) or **Join a room** (enter an existing room name).
-3. Start chatting!
+1. Choose your backend:
+   - `syncplay_server`
+   - `web_server`
+2. Enter your **Username**.
+3. In `syncplay_server` mode, choose to **Host a room** or **Join a room**. In `web_server` mode, it automatically joins room **`6767`**.
+4. Start chatting!
 
-You can also pass CLI flags directly:
+### Running Non-Interactively with Flags
 
 ```powershell
-node client.js --user alice --room CLI-4821
+# Connect via web_server to room 6767
+node client.js --server web_server --user alice
+
+# Connect via syncplay_server to a custom room
+node client.js --server syncplay_server --user bob --room 9988
 ```
 
 ---
@@ -56,10 +66,16 @@ node client.js --user alice --room CLI-4821
 
 ---
 
-## Building Standalone Executables
+## Standalone Executables
 
-The `build:*` scripts package standalone executables and require the optional `pkg` tool:
+Pre-compiled binaries can be executed directly without Node.js installed:
+
+- **Windows**: `client-win.exe`
+- **Linux**: `./client`
+
+To build executables from source:
 
 ```powershell
-npm run build
+npm run build:win    # packages client-win.exe
+npm run build:linux  # packages client (Linux x64)
 ```
