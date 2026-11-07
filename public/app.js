@@ -17,6 +17,8 @@ const state = {
   maxReconnectAttempts: 5,
   outgoingTransfers: {}, // id -> transferObj
   incomingTransfers: {}, // id -> transferObj
+  fileRegistry: {},      // id -> { id, filename, rawBytes, isIncoming }
+  activeEditingTransferId: null,
 };
 
 // DOM Elements
@@ -48,6 +50,10 @@ const elements = {
   soundIconOn: document.getElementById("sound-icon-on"),
   soundIconOff: document.getElementById("sound-icon-off"),
   toastContainer: document.getElementById("toast-container"),
+  fileEditorModal: document.getElementById("file-editor-modal"),
+  fileEditorTextarea: document.getElementById("file-editor-textarea"),
+  editorFilename: document.getElementById("editor-filename"),
+  editorStatsInfo: document.getElementById("editor-stats-info"),
 };
 
 // Architectural color palette for avatars
@@ -496,6 +502,13 @@ async function sendFile(file) {
   };
   state.outgoingTransfers[transferId] = transfer;
 
+  state.fileRegistry[transferId] = {
+    id: transferId,
+    filename: file.name,
+    rawBytes: rawBytes,
+    isIncoming: false,
+  };
+
   transfer.cardEl = renderOutgoingFileCard(transfer);
 
   state.ws.send(JSON.stringify({
@@ -551,7 +564,9 @@ function transmitOutgoingFile(transfer, recipient) {
       to: recipient,
       id: transfer.id,
     }));
-    updateFileCardDone(transfer.cardEl, `✓ Sent to ${recipient}`);
+    const regItem = state.fileRegistry[transfer.id];
+    const isText = isTextFile(transfer.filename, regItem ? regItem.rawBytes : transfer.payload);
+    updateOutgoingFileCardDone(transfer.cardEl, `✓ Sent to ${recipient}`, transfer.id, transfer.filename, isText);
     delete state.outgoingTransfers[transfer.id];
     return;
   }
@@ -568,7 +583,9 @@ function transmitOutgoingFile(transfer, recipient) {
         to: recipient,
         id: transfer.id,
       }));
-      updateFileCardDone(transfer.cardEl, `✓ Sent to ${recipient}`);
+      const regItem = state.fileRegistry[transfer.id];
+      const isText = isTextFile(transfer.filename, regItem ? regItem.rawBytes : transfer.payload);
+      updateOutgoingFileCardDone(transfer.cardEl, `✓ Sent to ${recipient}`, transfer.id, transfer.filename, isText);
       delete state.outgoingTransfers[transfer.id];
       return;
     }
@@ -734,8 +751,18 @@ async function finalizeIncomingFile(t) {
   const blob = new Blob([finalBytes]);
   const blobUrl = URL.createObjectURL(blob);
   t.downloadUrl = blobUrl;
+  t.rawBytes = finalBytes;
 
-  updateFileCardReady(t.cardEl, t.filename, humanSize(finalBytes.length), blobUrl);
+  state.fileRegistry[t.id] = {
+    id: t.id,
+    filename: t.filename,
+    rawBytes: finalBytes,
+    isIncoming: true,
+  };
+
+  const isText = isTextFile(t.filename, finalBytes);
+
+  updateFileCardReady(t.cardEl, t.filename, humanSize(finalBytes.length), blobUrl, t.id, isText);
   playChime("msg");
   showToast(`File ready: ${t.filename}`);
 
@@ -888,7 +915,7 @@ function updateFileCardDone(cardEl, text) {
   if (pctSpan) pctSpan.textContent = "";
 }
 
-function updateFileCardReady(cardEl, filename, sizeStr, downloadUrl) {
+function updateFileCardReady(cardEl, filename, sizeStr, downloadUrl, transferId, isText) {
   if (!cardEl) return;
   const track = cardEl.querySelector(".file-progress-track");
   if (track) track.classList.add("hidden");
@@ -899,14 +926,44 @@ function updateFileCardReady(cardEl, filename, sizeStr, downloadUrl) {
 
   const actions = cardEl.querySelector(".file-card-actions") || document.createElement("div");
   actions.className = "file-card-actions";
-  actions.innerHTML = `
+  
+  let buttonsHtml = `
     <a class="btn-file download" href="${downloadUrl}" download="${escapeHTML(filename)}">
       <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
       <span>Download</span>
     </a>
   `;
+
+  if (isText && transferId) {
+    buttonsHtml += `
+      <button type="button" class="btn-file edit" onclick="openFileEditor('${escapeHTML(transferId)}')">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg>
+        <span>Edit & Resend</span>
+      </button>
+    `;
+  }
+
+  actions.innerHTML = buttonsHtml;
   if (!cardEl.querySelector(".file-card-actions")) {
     cardEl.appendChild(actions);
+  }
+}
+
+function updateOutgoingFileCardDone(cardEl, text, transferId, filename, isText) {
+  updateFileCardDone(cardEl, text);
+  if (isText && transferId && cardEl) {
+    let actions = cardEl.querySelector(".file-card-actions");
+    if (!actions) {
+      actions = document.createElement("div");
+      actions.className = "file-card-actions";
+      cardEl.appendChild(actions);
+    }
+    actions.innerHTML = `
+      <button type="button" class="btn-file edit" onclick="openFileEditor('${escapeHTML(transferId)}')">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg>
+        <span>Edit & Resend</span>
+      </button>
+    `;
   }
 }
 
@@ -1177,3 +1234,152 @@ function escapeHTML(str) {
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#039;");
 }
+
+// ============================================================
+// INLINE FILE EDITOR & RESEND
+// ============================================================
+
+function isTextFile(filename, uint8Array) {
+  const textExtensions = [
+    "txt", "text", "md", "markdown", "json", "js", "mjs", "cjs", "jsx", "ts", "tsx",
+    "html", "htm", "css", "scss", "sass", "less", "py", "c", "cpp", "h", "hpp",
+    "cs", "java", "go", "rs", "php", "rb", "sh", "bash", "zsh", "bat", "cmd",
+    "ps1", "yaml", "yml", "toml", "ini", "conf", "config", "env", "xml", "svg",
+    "sql", "csv", "tsv", "log", "diff", "patch", "dockerfile", "gitignore"
+  ];
+  const parts = (filename || "").toLowerCase().split(".");
+  const ext = parts.length > 1 ? parts.pop() : "";
+  if (ext && textExtensions.includes(ext)) return true;
+  if ((filename || "").startsWith(".") && textExtensions.includes((filename || "").slice(1).toLowerCase())) return true;
+
+  if (uint8Array && uint8Array.length > 0) {
+    const sampleLen = Math.min(uint8Array.length, 2048);
+    for (let i = 0; i < sampleLen; i++) {
+      if (uint8Array[i] === 0) return false;
+    }
+    try {
+      new TextDecoder("utf-8", { fatal: true }).decode(uint8Array.subarray(0, sampleLen));
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+  return false;
+}
+
+function openFileEditor(transferId) {
+  const fileData = state.fileRegistry[transferId] || state.incomingTransfers[transferId] || state.outgoingTransfers[transferId];
+  if (!fileData) {
+    return showToast("File data not available");
+  }
+
+  const rawBytes = fileData.rawBytes || fileData.payload;
+  let text = "";
+  if (rawBytes) {
+    try {
+      text = new TextDecoder("utf-8").decode(rawBytes);
+    } catch (err) {
+      console.error("Failed to decode text:", err);
+      return showToast("Cannot edit non-UTF8 file");
+    }
+  }
+
+  state.activeEditingTransferId = transferId;
+  if (elements.editorFilename) {
+    elements.editorFilename.value = fileData.filename || "demo.txt";
+  }
+  if (elements.fileEditorTextarea) {
+    elements.fileEditorTextarea.value = text;
+  }
+  updateEditorStats();
+
+  if (elements.fileEditorModal) {
+    elements.fileEditorModal.classList.remove("hidden");
+    elements.fileEditorModal.setAttribute("aria-hidden", "false");
+    setTimeout(() => {
+      elements.fileEditorTextarea?.focus();
+    }, 50);
+  }
+}
+
+function closeFileEditor() {
+  if (elements.fileEditorModal) {
+    elements.fileEditorModal.classList.add("hidden");
+    elements.fileEditorModal.setAttribute("aria-hidden", "true");
+  }
+  state.activeEditingTransferId = null;
+}
+
+function handleModalBackdropClick(event) {
+  if (event.target === elements.fileEditorModal) {
+    closeFileEditor();
+  }
+}
+
+function updateEditorStats() {
+  if (!elements.fileEditorTextarea || !elements.editorStatsInfo) return;
+  const val = elements.fileEditorTextarea.value || "";
+  const lines = val ? val.split("\n").length : 0;
+  const chars = val.length;
+  const bytes = new Blob([val]).size;
+  elements.editorStatsInfo.textContent = `Lines: ${lines.toLocaleString()} · Chars: ${chars.toLocaleString()} · ${humanSize(bytes)}`;
+}
+
+function handleEditorKeydown(e) {
+  if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
+    e.preventDefault();
+    saveAndResendFile();
+    return;
+  }
+  if (e.key === "Escape") {
+    e.preventDefault();
+    closeFileEditor();
+    return;
+  }
+  if (e.key === "Tab") {
+    e.preventDefault();
+    const textarea = e.target;
+    const start = textarea.selectionStart;
+    const end = textarea.selectionEnd;
+    const val = textarea.value;
+    textarea.value = val.substring(0, start) + "  " + val.substring(end);
+    textarea.selectionStart = textarea.selectionEnd = start + 2;
+    updateEditorStats();
+  }
+}
+
+async function saveAndResendFile() {
+  if (!state.ws || state.ws.readyState !== WebSocket.OPEN) {
+    return showToast("Not connected to room");
+  }
+
+  const text = elements.fileEditorTextarea ? elements.fileEditorTextarea.value : "";
+  let filename = elements.editorFilename ? elements.editorFilename.value.trim() : "";
+  if (!filename) filename = "demo.txt";
+
+  closeFileEditor();
+
+  const blob = new Blob([text], { type: "text/plain;charset=utf-8" });
+  const file = new File([blob], filename, { type: "text/plain;charset=utf-8" });
+
+  showToast(`Broadcasting edited ${filename}...`);
+  await sendFile(file);
+}
+
+function downloadEditedFile() {
+  const text = elements.fileEditorTextarea ? elements.fileEditorTextarea.value : "";
+  let filename = elements.editorFilename ? elements.editorFilename.value.trim() : "";
+  if (!filename) filename = "edited_file.txt";
+
+  const blob = new Blob([text], { type: "text/plain;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  triggerDownload(url, filename);
+  showToast(`Saved copy of ${filename}`);
+  setTimeout(() => URL.revokeObjectURL(url), 10000);
+}
+
+window.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && elements.fileEditorModal && !elements.fileEditorModal.classList.contains("hidden")) {
+    closeFileEditor();
+  }
+});
