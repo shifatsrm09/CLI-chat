@@ -7,6 +7,9 @@
     "start": "node client.js",
     "client": "node client.js",
     "dev": "node dev.js",
+    "build:dev:win": "pkg dev.js --targets node18-win-x64 --output dev",
+    "build:dev:linux": "pkg dev.js --targets node18-linux-x64 --output dev-linux",
+    "build:dev": "npm run build:dev:win && npm run build:dev:linux",
     "build:win": "pkg client.js --targets node18-win-x64 --output client-win",
     "build:linux": "pkg client.js --targets node18-linux-x64 --output client",
     "build": "npm run build:win && npm run build:linux"
