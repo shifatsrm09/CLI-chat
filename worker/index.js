@@ -318,9 +318,9 @@ export class ChatRoom {
     ws.addEventListener("message", async (msgEvent) => {
       try {
         const rawData = msgEvent.data;
-        if (typeof rawData !== "string" || rawData.length > 65536) {
-          // Payload too large (max 64KB)
-          return this.sendJson(ws, { type: "error", error: "Message exceeds 64KB limit" });
+        if (typeof rawData !== "string" || rawData.length > 131072) {
+          // Payload too large (max 128KB)
+          return this.sendJson(ws, { type: "error", error: "Message exceeds 128KB limit" });
         }
 
         // Rate limiting: max 300 messages per 5 seconds (allows rapid file streaming)

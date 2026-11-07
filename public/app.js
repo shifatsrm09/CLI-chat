@@ -69,8 +69,8 @@ const AVATAR_PALETTE = [
 ];
 
 // File Transfer Config
-const WEB_FILE_SLICE = 24 * 1024; // 24 KB raw payload per chunk
-const WEB_CHUNK_PACE_MS = 70;      // 70ms pacing (~14 msgs/sec, safe under Cloudflare 75 msgs / 5s)
+const WEB_FILE_SLICE = 16 * 1024; // 16 KB raw payload per chunk (safe under 32KB/64KB frame limits)
+const WEB_CHUNK_PACE_MS = 60;      // 60ms pacing (~16 msgs/sec, safe under rate limits)
 
 // Initialization
 document.addEventListener("DOMContentLoaded", async () => {
@@ -604,11 +604,8 @@ function transmitOutgoingFile(transfer, recipient) {
       to: recipient,
       id: transfer.id,
       i: chunkIndex,
-      index: chunkIndex,
       n: totalChunks,
-      totalChunks: totalChunks,
       d: b64,
-      data: b64,
     }));
 
     chunkIndex++;
