@@ -630,7 +630,7 @@ function handleWebFrame(attempt, raw) {
     if (msg.type === "chat") {
         const sender = String(msg.user || "").trim();
         const text   = String(msg.message || "");
-        if (!sender || sender === username) return; // ignore our own echo
+        if (!sender || sender.toLowerCase() === username.toLowerCase()) return; // ignore our own echo
         roomUsers.add(sender);
         print(`${c.bold}${c.blue}${sender}${c.reset}: ${text}`);
         return;
@@ -1070,7 +1070,7 @@ function handleSyncplayFrame(attempt, root) {
         const message = String(root.Chat.message || "");
         if (!sender) return;
         roomUsers.add(sender);
-        if (sender === username) return; // ignore our own echo
+        if (sender.toLowerCase() === username.toLowerCase()) return; // ignore our own echo
         handleIncomingSyncplayChat(sender, message);
         return;
     }
@@ -1581,7 +1581,6 @@ function handleInput(line) {
             return;
         }
         webSocket.send(JSON.stringify({ type: "chat", text: input }));
-        print(`${c.bold}${c.green}${username}${c.reset}: ${input}`);
     } else {
         sendSyncplayUserChatMessage(input);
     }
@@ -2003,10 +2002,6 @@ function listCurrentDirectory() {
 }
 
 function safeFilename(name) {
-    if (!fs.existsSync(name)) return name;
-    const ext  = path.extname(name);
-    const base = path.basename(name, ext);
-    let i = 1;
-    while (fs.existsSync(`${base}(${i})${ext}`)) i++;
-    return `${base}(${i})${ext}`;
+    const clean = path.basename(String(name || "file").replace(/[/\\]/g, "_"));
+    return clean || "file";
 }
