@@ -323,7 +323,7 @@ export class ChatRoom {
           return this.sendJson(ws, { type: "error", error: "Message exceeds 64KB limit" });
         }
 
-        // Rate limiting: max 75 messages per 5 seconds
+        // Rate limiting: max 300 messages per 5 seconds (allows rapid file streaming)
         const currentTime = Date.now();
         sessionInfo.lastSeen = currentTime;
         if (currentTime - sessionInfo.windowStart > 5000) {
@@ -331,7 +331,7 @@ export class ChatRoom {
           sessionInfo.msgCount = 0;
         }
         sessionInfo.msgCount++;
-        if (sessionInfo.msgCount > 75) {
+        if (sessionInfo.msgCount > 300) {
           return this.sendJson(ws, {
             type: "error",
             error: "Rate limit exceeded. Please wait a moment.",

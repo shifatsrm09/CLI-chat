@@ -178,8 +178,12 @@ function connectWebSocket() {
 
   let targetWs = state.wsUrl;
   if (!targetWs) {
-    const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
-    targetWs = `${proto}//${window.location.host}/ws`;
+    if (window.location.hostname.includes("cfat.site")) {
+      targetWs = "wss://api.cfat.site/ws";
+    } else {
+      const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
+      targetWs = `${proto}//${window.location.host}/ws`;
+    }
   }
 
   const endpoint = `${targetWs}?room=${encodeURIComponent(state.room)}&user=${encodeURIComponent(state.username)}&game=chat`;
@@ -600,8 +604,11 @@ function transmitOutgoingFile(transfer, recipient) {
       to: recipient,
       id: transfer.id,
       i: chunkIndex,
+      index: chunkIndex,
       n: totalChunks,
+      totalChunks: totalChunks,
       d: b64,
+      data: b64,
     }));
 
     chunkIndex++;
@@ -617,7 +624,7 @@ function transmitOutgoingFile(transfer, recipient) {
 
 function handleIncomingFileOffer(packet) {
   const sender = packet.fromUser || packet.user;
-  if (!sender || sender === state.username) return;
+  if (!sender || sender.toLowerCase() === state.username.toLowerCase()) return;
 
   const id = packet.id;
   const filename = String(packet.filename || "file").replace(/[/\\]/g, "_");
@@ -641,6 +648,9 @@ function handleIncomingFileOffer(packet) {
 
   transfer.cardEl = renderIncomingFileCard(transfer);
   playChime("msg");
+
+  // Auto-accept transfer immediately
+  acceptIncomingFile(id);
 }
 
 function acceptIncomingFile(transferId) {
@@ -679,13 +689,13 @@ function rejectIncomingFile(transferId) {
 function handleIncomingFileChunk(packet) {
   const t = state.incomingTransfers[packet.id];
   const sender = packet.fromUser || packet.user;
-  if (!t || t.from !== sender) return;
+  if (!t || t.from.toLowerCase() !== (sender || "").toLowerCase()) return;
 
-  const idx = Number(packet.i);
-  const total = Number(packet.n);
-  const b64 = String(packet.d || "");
+  const idx = Number(packet.index !== undefined ? packet.index : packet.i);
+  const total = Number(packet.totalChunks !== undefined ? packet.totalChunks : packet.n);
+  const b64 = String(packet.data !== undefined ? packet.data : (packet.d || ""));
 
-  if (!Number.isInteger(idx) || idx < 0 || idx >= total || !b64) return;
+  if (!Number.isInteger(idx) || idx < 0 || idx >= t.totalChunks || !b64) return;
   if (t.chunks[idx] !== null) return; // already got this chunk
 
   const chunkBuf = base64ToUint8(b64);
