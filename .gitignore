@@ -1,5 +1,9 @@
 node_modules/
 client
 client-win.exe
+dev
+dev.exe
+dev-linux
 .env
 test.txt
+demo.txt
