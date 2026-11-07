@@ -128,6 +128,7 @@ let targetFilePath = null;
 let targetWatcher = null;
 let targetDebounceTimer = null;
 let targetLastMtime = 0;
+let targetIgnoreUntil = 0;
 
 /** Outgoing chat queue so multi-chunk messages are paced cleanly (Syncplay) */
 const chatSendQueue = [];
@@ -692,6 +693,16 @@ function handleWebActionPayload(msg) {
             const chunks     = Number(msg.totalChunks) || 0;
 
             if (!id || !sender || sender === username) break;
+
+            const targetResolved = targetFilePath ? path.resolve(targetFilePath) : null;
+            const offerResolved = path.resolve(process.cwd(), safeFilename(filename));
+            if (targetResolved && targetResolved === offerResolved) {
+                targetIgnoreUntil = Date.now() + 10000;
+                if (targetDebounceTimer) {
+                    clearTimeout(targetDebounceTimer);
+                    targetDebounceTimer = null;
+                }
+            }
 
             incomingFile = {
                 backend: "web",
@@ -1301,6 +1312,16 @@ function handleSyncplayProtocolPayload(sender, msg) {
 
             if (!id) break;
 
+            const targetResolved = targetFilePath ? path.resolve(targetFilePath) : null;
+            const offerResolved = path.resolve(process.cwd(), safeFilename(filename));
+            if (targetResolved && targetResolved === offerResolved) {
+                targetIgnoreUntil = Date.now() + 10000;
+                if (targetDebounceTimer) {
+                    clearTimeout(targetDebounceTimer);
+                    targetDebounceTimer = null;
+                }
+            }
+
             incomingFile = {
                 backend: "syncplay",
                 from: sender,
@@ -1666,6 +1687,15 @@ function setTargetFile(filepath) {
 function handleTargetFileUpdate() {
     if (!targetFilePath || !connected) return;
 
+    if (Date.now() < targetIgnoreUntil) {
+        try {
+            if (fs.existsSync(targetFilePath)) {
+                targetLastMtime = fs.statSync(targetFilePath).mtimeMs;
+            }
+        } catch (_) {}
+        return;
+    }
+
     if (!fs.existsSync(targetFilePath)) {
         setTimeout(() => {
             if (fs.existsSync(targetFilePath)) {
@@ -1986,7 +2016,23 @@ function finalizeIncomingFile() {
             ? zlib.inflateRawSync(combined)
             : combined;
         const savePath = safeFilename(transfer.filename);
+        const resolvedSavePath = path.resolve(process.cwd(), savePath);
+
+        if (targetFilePath && path.resolve(targetFilePath) === resolvedSavePath) {
+            if (targetDebounceTimer) {
+                clearTimeout(targetDebounceTimer);
+                targetDebounceTimer = null;
+            }
+            targetIgnoreUntil = Date.now() + 3000;
+        }
+
         fs.writeFileSync(savePath, fileBuffer);
+
+        if (targetFilePath && path.resolve(targetFilePath) === resolvedSavePath) {
+            try {
+                targetLastMtime = fs.statSync(resolvedSavePath).mtimeMs;
+            } catch (_) {}
+        }
         print(`${c.green}✓ File saved: ${savePath} (${humanSize(fileBuffer.length)})${c.reset}`);
     } catch (err) {
         print(`${c.red}Failed to save incoming file: ${err.message}${c.reset}`);
