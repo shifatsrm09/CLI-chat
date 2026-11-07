@@ -44,7 +44,6 @@ const STEALTH = process.argv.includes("-s");
 const SYNCPLAY_HOST          = getArgValue("--host") || "syncplay.pl";
 const SYNCPLAY_PORT          = Number(getArgValue("--port")) || 8995;
 const CFAT_WS_URL            = getArgValue("--ws-url") || "wss://api.cfat.site/ws";
-const CFAT_DEFAULT_ROOM      = "6767";
 
 const DEFAULT_MAX_CHAT_LEN   = 150;
 const MAX_USERNAME_LEN       = 24;
@@ -55,8 +54,8 @@ const CHUNK_TIMEOUT_MS       = 20_000;   // expire incomplete chunk assemblies
 const CHAT_CHUNK_PACE_MS     = 25;       // pacing between 150-char chat chunks
 const SYNCPLAY_FILE_SLICE    = 7200;     // 7200 bytes = 9600 base64 chars (< 10000 Syncplay limit)
 const SYNCPLAY_CHUNK_PACE_MS = 45;       // pacing between Syncplay file chunks
-const WEB_FILE_SLICE         = 24 * 1024;// 24 KB raw payload per chunk for Cloudflare Worker (< 64KB limit)
-const WEB_CHUNK_PACE_MS      = 70;       // ~14 msgs/sec, safe under 75 msgs / 5s rate limit
+const WEB_FILE_SLICE         = 16 * 1024; // 16 KB raw payload per chunk (< 32KB/64KB frame limits)
+const WEB_CHUNK_PACE_MS      = 60;        // 60ms pacing (~16 msgs/sec, safe under rate limits)
 const HEARTBEAT_MS           = 1500;     // Syncplay State keepalive interval
 const WEB_PING_INTERVAL_MS   = 25_000;   // Cloudflare Worker keepalive ping
 const CONNECT_TIMEOUT_MS     = 15_000;
@@ -85,8 +84,8 @@ const c = STEALTH
 /* ─── State ─────────────────────────────────────────────────────── */
 
 let serverType       = sanitizeServerType(getArgValue("--server") || getArgValue("-server"));
-let username         = getArgValue("--user") || "";
-let room             = getArgValue("--room") || "";
+let username         = getArgValue("--user") || getArgValue("-u") || "";
+let room             = getArgValue("--room") || getArgValue("-r") || "";
 let maxChatLength    = DEFAULT_MAX_CHAT_LEN;
 
 // Syncplay socket handles
@@ -146,41 +145,18 @@ let chatQueueTimer  = null;
             process.exit(1);
         }
 
-        if (serverType === "syncplay_server") {
-            if (!room) {
-                const mode = await selectRoomAction();
-                if (mode === "host") {
-                    const customRoom = await askQuestion(
-                        `${c.bold}Room name to host ${c.gray}(press Enter for random code)${c.reset}${c.bold}: ${c.reset}`
-                    );
-                    room = sanitizeRoomName(customRoom) || generateRoomCode();
-                    console.log(
-                        `${c.gray}Hosting room:${c.reset} ${c.bold}${c.cyan}${room}${c.reset} ` +
-                        `${c.gray}(share this room name with others to join)${c.reset}`
-                    );
+        if (!room) {
+            while (!room) {
+                const roomInput = await askQuestion(`${c.bold}Enter 4-digit room code: ${c.reset}`);
+                const clean = sanitizeRoomName(roomInput);
+                if (/^\d{4}$/.test(clean)) {
+                    room = clean;
                 } else {
-                    const joinName = await askQuestion(`${c.bold}Enter room name to join: ${c.reset}`);
-                    room = sanitizeRoomName(joinName);
-                    if (!room) {
-                        console.log(`${c.red}Room name cannot be empty.${c.reset}`);
-                        process.exit(1);
-                    }
-                    console.log(`${c.gray}Joining room:${c.reset} ${c.bold}${c.cyan}${room}${c.reset}`);
+                    console.log(`${c.red}Please enter a valid 4-digit code (e.g. 1234).${c.reset}`);
                 }
-            } else {
-                room = sanitizeRoomName(room);
             }
         } else {
-            // web_server (api.cfat.site)
-            if (!room) {
-                room = CFAT_DEFAULT_ROOM; // auto-connects to room 6767
-            } else {
-                room = sanitizeRoomName(room);
-            }
-            console.log(
-                `${c.gray}Web room:${c.reset} ${c.bold}${c.cyan}${room}${c.reset} ` +
-                `${c.gray}(connected to api.cfat.site & chat.cfat.site)${c.reset}`
-            );
+            room = sanitizeRoomName(room);
         }
     } catch {
         process.exit(1);
@@ -270,7 +246,7 @@ function selectServerMenu() {
             {
                 id: "web_server",
                 label: "web_server",
-                desc: "CFAT Edge Worker relay (api.cfat.site -> auto room 6767)"
+                desc: "CFAT Edge Worker relay (api.cfat.site / chat.cfat.site)"
             }
         ];
         let index = 0;
@@ -738,12 +714,14 @@ function handleWebActionPayload(msg) {
         }
 
         case "file_chunk": {
-            if (!incomingFile || incomingFile.id !== msg.id || incomingFile.from !== sender) break;
-            const idx   = Number(msg.i);
-            const total = Number(msg.n);
-            const b64   = String(msg.d || "");
+            if (!incomingFile || incomingFile.id !== msg.id) break;
+            if (incomingFile.from.toLowerCase() !== sender.toLowerCase()) break;
 
-            if (!Number.isInteger(idx) || idx < 0 || idx >= total || !b64) break;
+            const idx   = Number(msg.i !== undefined ? msg.i : msg.index);
+            const total = Number(msg.n !== undefined ? msg.n : msg.totalChunks);
+            const b64   = String(msg.d !== undefined ? msg.d : (msg.data || ""));
+
+            if (!Number.isInteger(idx) || idx < 0 || idx >= incomingFile.totalChunks || !b64) break;
 
             if (incomingFile.chunks[idx] !== null) break; // duplicate chunk
 
@@ -765,7 +743,7 @@ function handleWebActionPayload(msg) {
         }
 
         case "file_done": {
-            if (!incomingFile || incomingFile.id !== msg.id || incomingFile.from !== sender) break;
+            if (!incomingFile || incomingFile.id !== msg.id || incomingFile.from.toLowerCase() !== sender.toLowerCase()) break;
             if (incomingFile.receivedChunks >= incomingFile.totalChunks) {
                 finalizeIncomingFile();
             }
@@ -773,7 +751,7 @@ function handleWebActionPayload(msg) {
         }
 
         case "file_cancel": {
-            if (incomingFile && incomingFile.from === sender && (!msg.id || incomingFile.id === msg.id)) {
+            if (incomingFile && incomingFile.from.toLowerCase() === sender.toLowerCase() && (!msg.id || incomingFile.id === msg.id)) {
                 clearProgress();
                 print(`${c.red}Transfer cancelled by ${sender}.${c.reset}`);
                 incomingFile = null;
@@ -1876,12 +1854,12 @@ function cleanupUserTransfers(peerName) {
             pendingTextChunks.delete(key);
         }
     }
-    if (incomingFile && incomingFile.from === peerName) {
+    if (incomingFile && incomingFile.from.toLowerCase() === peerName.toLowerCase()) {
         clearProgress();
         print(`${c.red}Transfer interrupted: ${peerName} left the room.${c.reset}`);
         incomingFile = null;
     }
-    if (outgoingFile && outgoingFile.acceptedBy === peerName) {
+    if (outgoingFile && outgoingFile.acceptedBy && outgoingFile.acceptedBy.toLowerCase() === peerName.toLowerCase()) {
         if (outgoingFile.timer) clearTimeout(outgoingFile.timer);
         clearProgress();
         print(`${c.red}Transfer interrupted: ${peerName} left the room.${c.reset}`);

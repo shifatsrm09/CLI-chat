@@ -47,8 +47,8 @@ const CFAT_DEFAULT_ROOM      = "6767";
 
 const MAX_USERNAME_LEN       = 24;
 const MAX_ROOM_NAME_LEN      = 35;
-const WEB_FILE_SLICE         = 24 * 1024; // 24 KB raw payload per chunk (< 64KB Cloudflare limit)
-const WEB_CHUNK_PACE_MS      = 70;        // ~14 msgs/sec, safe under rate limits
+const WEB_FILE_SLICE         = 16 * 1024; // 16 KB raw payload per chunk (< 32KB/64KB frame limits)
+const WEB_CHUNK_PACE_MS      = 60;        // 60ms pacing (~16 msgs/sec, safe under rate limits)
 const WEB_PING_INTERVAL_MS   = 25_000;    // Cloudflare Worker keepalive ping
 const CONNECT_TIMEOUT_MS     = 15_000;
 const CONNECT_MAX            = 97;
@@ -523,7 +523,7 @@ function handleWebActionPayload(msg) {
         }
 
         case "file_done": {
-            if (!incomingFile || incomingFile.id !== msg.id || incomingFile.from !== sender) break;
+            if (!incomingFile || incomingFile.id !== msg.id || incomingFile.from.toLowerCase() !== sender.toLowerCase()) break;
             if (incomingFile.receivedChunks >= incomingFile.totalChunks) {
                 finalizeIncomingFile();
             }
@@ -531,7 +531,7 @@ function handleWebActionPayload(msg) {
         }
 
         case "file_cancel": {
-            if (incomingFile && incomingFile.from === sender && (!msg.id || incomingFile.id === msg.id)) {
+            if (incomingFile && incomingFile.from.toLowerCase() === sender.toLowerCase() && (!msg.id || incomingFile.id === msg.id)) {
                 clearProgress();
                 print(`${c.red}Transfer cancelled by ${sender}.${c.reset}`);
                 incomingFile = null;
@@ -956,11 +956,8 @@ function transmitWebFile(transfer, recipient) {
             action: "file_chunk",
             to: recipient,
             id: transfer.id,
-            index: chunkIndex,
             i: chunkIndex,
-            totalChunks,
             n: totalChunks,
-            data: slice.toString("base64"),
             d: slice.toString("base64"),
         });
 
@@ -1013,12 +1010,12 @@ function finalizeIncomingFile() {
 }
 
 function cleanupUserTransfers(peerName) {
-    if (incomingFile && incomingFile.from === peerName) {
+    if (incomingFile && incomingFile.from.toLowerCase() === peerName.toLowerCase()) {
         clearProgress();
         print(`${c.red}Transfer interrupted: ${peerName} left the room.${c.reset}`);
         incomingFile = null;
     }
-    if (outgoingFile && outgoingFile.acceptedBy === peerName) {
+    if (outgoingFile && outgoingFile.acceptedBy && outgoingFile.acceptedBy.toLowerCase() === peerName.toLowerCase()) {
         if (outgoingFile.timer) clearTimeout(outgoingFile.timer);
         clearProgress();
         print(`${c.red}Transfer interrupted: ${peerName} left the room.${c.reset}`);
