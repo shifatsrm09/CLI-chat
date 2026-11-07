@@ -495,13 +495,17 @@ function handleWebActionPayload(msg) {
         }
 
         case "file_chunk": {
-            if (!incomingFile || incomingFile.id !== msg.id || incomingFile.from !== sender) break;
-            const idx = Number(msg.index);
-            if (idx < 0 || idx >= incomingFile.totalChunks) break;
+            if (!incomingFile || incomingFile.id !== msg.id) break;
+            if (incomingFile.from.toLowerCase() !== sender.toLowerCase()) break;
 
-            const chunkBuf = Buffer.from(String(msg.data || ""), "base64");
+            const idx = Number(msg.index !== undefined ? msg.index : msg.i);
+            const total = Number(msg.totalChunks !== undefined ? msg.totalChunks : msg.n);
+            const b64 = String(msg.data !== undefined ? msg.data : (msg.d || ""));
+
+            if (!Number.isInteger(idx) || idx < 0 || idx >= incomingFile.totalChunks || !b64) break;
             if (incomingFile.chunks[idx] !== null) break; // duplicate chunk
 
+            const chunkBuf = Buffer.from(b64, "base64");
             incomingFile.chunks[idx] = chunkBuf;
             incomingFile.receivedChunks++;
             incomingFile.receivedEncodedBytes += chunkBuf.length;
@@ -953,8 +957,11 @@ function transmitWebFile(transfer, recipient) {
             to: recipient,
             id: transfer.id,
             index: chunkIndex,
+            i: chunkIndex,
             totalChunks,
+            n: totalChunks,
             data: slice.toString("base64"),
+            d: slice.toString("base64"),
         });
 
         chunkIndex++;
