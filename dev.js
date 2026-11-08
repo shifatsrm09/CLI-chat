@@ -48,7 +48,7 @@ const CFAT_DEFAULT_ROOM      = "6767";
 const MAX_USERNAME_LEN       = 24;
 const MAX_ROOM_NAME_LEN      = 35;
 const WEB_FILE_SLICE         = 16 * 1024; // 16 KB raw payload per chunk (< 32KB/64KB frame limits)
-const WEB_CHUNK_PACE_MS      = 60;        // 60ms pacing (~16 msgs/sec, safe under rate limits)
+const WEB_CHUNK_PACE_MS      = 25;        // 25ms pacing (~40 msgs/sec, fast and smooth under 800/5s limit)
 const WEB_PING_INTERVAL_MS   = 25_000;    // Cloudflare Worker keepalive ping
 const CONNECT_TIMEOUT_MS     = 15_000;
 const CONNECT_MAX            = 97;
@@ -95,11 +95,14 @@ let pendingListPrint = false;
 /** Online users in current room */
 const roomUsers = new Set();
 
-/** Outgoing transfer currently sending */
-let outgoingFile = null;
+/** Outgoing transfers currently sending or recently finished */
+const outgoingTransfers       = new Map();
+const recentOutgoingTransfers = new Map();
+let outgoingFile              = null; // active outgoing transfer for progress bar
 
-/** Incoming transfer being reassembled */
-let incomingFile = null;
+/** Incoming transfers being reassembled */
+const incomingTransfers       = new Map();
+let incomingFile              = null; // active incoming transfer for progress bar
 
 /** Target file auto-send watcher */
 let targetFilePath      = null;
@@ -448,7 +451,10 @@ function handleWebActionPayload(msg) {
                 }
             }
 
-            incomingFile = {
+            const existing = incomingTransfers.get(id);
+            if (existing && existing.finalized) break;
+
+            const transfer = {
                 backend: "web",
                 from: sender,
                 id,
@@ -459,82 +465,125 @@ function handleWebActionPayload(msg) {
                 chunks: new Array(Math.max(1, chunks)).fill(null),
                 receivedChunks: 0,
                 receivedEncodedBytes: 0,
+                finalized: false,
+                watchdogTimer: null,
+                retryCount: 0,
             };
+            incomingTransfers.set(id, transfer);
+            incomingFile = transfer;
+
             sendWebAction({ action: "file_accept", to: sender, id });
             print(`${c.yellow}${sender} is sending ${c.bold}${filename}${c.reset}${c.yellow} (${humanSize(size)}) — auto-accepting…${c.reset}`);
             if (size === 0 && chunks === 0) {
-                finalizeIncomingFile();
+                finalizeIncomingTransfer(transfer);
+            } else {
+                resetIncomingWatchdog(transfer);
             }
             break;
         }
 
         case "file_accept": {
-            if (!outgoingFile || outgoingFile.id !== msg.id) break;
-            if (outgoingFile.acceptedBy) {
-                sendWebAction({
-                    action: "file_reject",
-                    to: sender,
-                    id: msg.id,
-                    reason: "Transfer already accepted by another user",
-                });
-                break;
+            const transfer = outgoingTransfers.get(msg.id);
+            if (!transfer) break;
+            if (sender) transfer.acceptedBy.add(sender);
+            if (!transfer.isTransmitting) {
+                if (transfer.timer) clearTimeout(transfer.timer);
+                transmitWebFile(transfer);
             }
-            outgoingFile.acceptedBy = sender;
-            print(`${c.green}${sender} accepted the file. Sending…${c.reset}`);
-            transmitWebFile(outgoingFile, sender);
             break;
         }
 
         case "file_reject": {
-            if (!outgoingFile || outgoingFile.id !== msg.id) break;
-            if (!outgoingFile.acceptedBy) {
-                print(`${c.yellow}${sender} declined the file.${c.reset}`);
-                outgoingFile = null;
+            const transfer = outgoingTransfers.get(msg.id);
+            if (transfer && sender) {
+                transfer.acceptedBy.delete(sender);
             }
             break;
         }
 
+        case "file_request_chunks": {
+            const transfer = outgoingTransfers.get(msg.id) || recentOutgoingTransfers.get(msg.id);
+            if (!transfer || !sender || !Array.isArray(msg.missing)) break;
+
+            const payload = transfer.payloadBuffer;
+            const totalChunks = transfer.totalChunks;
+            for (const idx of msg.missing) {
+                if (!Number.isInteger(idx) || idx < 0 || idx >= totalChunks) continue;
+                const start = idx * WEB_FILE_SLICE;
+                const slice = payload.subarray(start, start + WEB_FILE_SLICE);
+                sendWebAction({
+                    action: "file_chunk",
+                    to: sender,
+                    id: transfer.id,
+                    i: idx,
+                    index: idx,
+                    n: totalChunks,
+                    totalChunks,
+                    d: slice.toString("base64"),
+                    data: slice.toString("base64"),
+                });
+            }
+            sendWebAction({
+                action: "file_done",
+                to: sender,
+                id: transfer.id,
+                totalChunks,
+            });
+            break;
+        }
+
         case "file_chunk": {
-            if (!incomingFile || incomingFile.id !== msg.id) break;
-            if (incomingFile.from.toLowerCase() !== sender.toLowerCase()) break;
+            const transfer = incomingTransfers.get(msg.id);
+            if (!transfer || transfer.finalized) break;
+            if (sender && transfer.from.toLowerCase() !== sender.toLowerCase()) break;
 
             const idx = Number(msg.index !== undefined ? msg.index : msg.i);
             const total = Number(msg.totalChunks !== undefined ? msg.totalChunks : msg.n);
             const b64 = String(msg.data !== undefined ? msg.data : (msg.d || ""));
 
-            if (!Number.isInteger(idx) || idx < 0 || idx >= incomingFile.totalChunks || !b64) break;
-            if (incomingFile.chunks[idx] !== null) break; // duplicate chunk
+            if (!Number.isInteger(idx) || idx < 0 || idx >= transfer.totalChunks || !b64) break;
+            if (transfer.chunks[idx] !== null) break; // duplicate chunk
 
             const chunkBuf = Buffer.from(b64, "base64");
-            incomingFile.chunks[idx] = chunkBuf;
-            incomingFile.receivedChunks++;
-            incomingFile.receivedEncodedBytes += chunkBuf.length;
+            transfer.chunks[idx] = chunkBuf;
+            transfer.receivedChunks++;
+            transfer.receivedEncodedBytes += chunkBuf.length;
 
+            incomingFile = transfer;
             const approxRawReceived = Math.min(
-                incomingFile.size,
-                Math.round((incomingFile.receivedChunks / incomingFile.totalChunks) * incomingFile.size)
+                transfer.size,
+                Math.round((transfer.receivedChunks / transfer.totalChunks) * transfer.size)
             );
-            drawProgress("Receiving", approxRawReceived, incomingFile.size);
+            drawProgress("Receiving", approxRawReceived, transfer.size);
+            resetIncomingWatchdog(transfer);
 
-            if (incomingFile.receivedChunks >= incomingFile.totalChunks) {
-                finalizeIncomingFile();
+            if (transfer.receivedChunks >= transfer.totalChunks) {
+                finalizeIncomingTransfer(transfer);
             }
             break;
         }
 
         case "file_done": {
-            if (!incomingFile || incomingFile.id !== msg.id || incomingFile.from.toLowerCase() !== sender.toLowerCase()) break;
-            if (incomingFile.receivedChunks >= incomingFile.totalChunks) {
-                finalizeIncomingFile();
+            const transfer = incomingTransfers.get(msg.id);
+            if (!transfer || transfer.finalized) break;
+            if (sender && transfer.from.toLowerCase() !== sender.toLowerCase()) break;
+
+            if (transfer.receivedChunks >= transfer.totalChunks) {
+                finalizeIncomingTransfer(transfer);
+            } else {
+                requestMissingChunks(transfer);
             }
             break;
         }
 
         case "file_cancel": {
-            if (incomingFile && incomingFile.from.toLowerCase() === sender.toLowerCase() && (!msg.id || incomingFile.id === msg.id)) {
+            const transfer = incomingTransfers.get(msg.id);
+            if (transfer && (!sender || transfer.from.toLowerCase() === sender.toLowerCase())) {
                 clearProgress();
-                print(`${c.red}Transfer cancelled by ${sender}.${c.reset}`);
-                incomingFile = null;
+                if (transfer.watchdogTimer) clearTimeout(transfer.watchdogTimer);
+                print(`${c.red}Transfer cancelled by ${sender || "peer"}.${c.reset}`);
+                incomingTransfers.delete(msg.id);
+                if (incomingFile === transfer) incomingFile = null;
             }
             break;
         }
@@ -899,7 +948,7 @@ function sendWebFile(filepath, stat) {
             : 0;
         const transferId = crypto.randomBytes(4).toString("hex");
 
-        outgoingFile = {
+        const transfer = {
             backend: "web",
             id: transferId,
             filename,
@@ -907,10 +956,15 @@ function sendWebFile(filepath, stat) {
             payloadBuffer,
             compressed: useCompressed,
             totalChunks,
-            acceptedBy: null,
+            acceptedBy: new Set(),
+            isTransmitting: false,
             timer: null,
         };
 
+        outgoingTransfers.set(transferId, transfer);
+        outgoingFile = transfer;
+
+        // 1. Broadcast file_offer to entire room
         sendWebAction({
             action: "file_offer",
             id: transferId,
@@ -918,47 +972,62 @@ function sendWebFile(filepath, stat) {
             size: stat.size,
             compressed: useCompressed ? 1 : 0,
             totalChunks,
+            excludeSelf: true,
         });
 
-        print(`${c.gray}Offered file ${filename} (${humanSize(stat.size)}) — waiting for acceptance…${c.reset}`);
+        print(`${c.cyan}Sending ${filename} (${humanSize(stat.size)}) to room…${c.reset}`);
+
+        // 2. Wait 150ms for peers to register transfer, then stream broadcast chunks
+        transfer.timer = setTimeout(() => {
+            transmitWebFile(transfer);
+        }, 150);
     } catch (err) {
         print(`${c.red}Failed to prepare file transfer: ${err.message}${c.reset}`);
     }
 }
 
-function transmitWebFile(transfer, recipient) {
+function transmitWebFile(transfer) {
+    if (transfer.isTransmitting) return;
+    transfer.isTransmitting = true;
+
     const payload = transfer.payloadBuffer;
     const totalChunks = transfer.totalChunks;
     let chunkIndex = 0;
 
     if (totalChunks === 0) {
-        sendWebAction({ action: "file_done", to: recipient, id: transfer.id });
+        sendWebAction({ action: "file_done", id: transfer.id, totalChunks: 0, excludeSelf: true });
         print(`${c.green}✓ File sent: ${transfer.filename}${c.reset}`);
-        outgoingFile = null;
+        scheduleOutgoingPruning(transfer.id);
+        if (outgoingFile === transfer) outgoingFile = null;
         return;
     }
 
     function sendNextChunk() {
-        if (!connected || outgoingFile !== transfer) return;
+        if (!connected || !outgoingTransfers.has(transfer.id)) return;
 
         if (chunkIndex >= totalChunks) {
             clearProgress();
-            sendWebAction({ action: "file_done", to: recipient, id: transfer.id });
+            sendWebAction({ action: "file_done", id: transfer.id, totalChunks, excludeSelf: true });
             print(`${c.green}✓ File sent: ${transfer.filename}${c.reset}`);
-            outgoingFile = null;
+            scheduleOutgoingPruning(transfer.id);
+            if (outgoingFile === transfer) outgoingFile = null;
             return;
         }
 
         const start = chunkIndex * WEB_FILE_SLICE;
         const slice = payload.subarray(start, start + WEB_FILE_SLICE);
 
+        // Broadcast chunk to entire room (no "to", excludeSelf: true)
         sendWebAction({
             action: "file_chunk",
-            to: recipient,
             id: transfer.id,
             i: chunkIndex,
+            index: chunkIndex,
             n: totalChunks,
+            totalChunks,
             d: slice.toString("base64"),
+            data: slice.toString("base64"),
+            excludeSelf: true,
         });
 
         chunkIndex++;
@@ -971,10 +1040,65 @@ function transmitWebFile(transfer, recipient) {
     sendNextChunk();
 }
 
-function finalizeIncomingFile() {
-    if (!incomingFile) return;
-    const transfer = incomingFile;
-    incomingFile = null;
+function scheduleOutgoingPruning(id) {
+    const transfer = outgoingTransfers.get(id);
+    if (transfer) {
+        recentOutgoingTransfers.set(id, transfer);
+    }
+    setTimeout(() => {
+        outgoingTransfers.delete(id);
+        recentOutgoingTransfers.delete(id);
+    }, 120_000); // Retain in memory for 2 minutes for any chunk retry requests
+}
+
+function resetIncomingWatchdog(transfer) {
+    if (transfer.watchdogTimer) clearTimeout(transfer.watchdogTimer);
+    if (transfer.finalized) return;
+
+    transfer.watchdogTimer = setTimeout(() => {
+        if (!transfer.finalized && transfer.receivedChunks < transfer.totalChunks) {
+            requestMissingChunks(transfer);
+        }
+    }, 2500);
+}
+
+function requestMissingChunks(transfer) {
+    if (!transfer || transfer.finalized || !connected) return;
+    transfer.retryCount = (transfer.retryCount || 0) + 1;
+    if (transfer.retryCount > 5) {
+        if (transfer.watchdogTimer) clearTimeout(transfer.watchdogTimer);
+        clearProgress();
+        print(`${c.red}Transfer failed for ${transfer.filename}: connection timed out.${c.reset}`);
+        incomingTransfers.delete(transfer.id);
+        if (incomingFile === transfer) incomingFile = null;
+        return;
+    }
+
+    const missing = [];
+    for (let i = 0; i < transfer.totalChunks; i++) {
+        if (transfer.chunks[i] === null) missing.push(i);
+    }
+
+    if (missing.length === 0) {
+        finalizeIncomingTransfer(transfer);
+        return;
+    }
+
+    print(`${c.yellow}Recovering ${missing.length} missing parts for ${transfer.filename} (retry ${transfer.retryCount})…${c.reset}`);
+    sendWebAction({
+        action: "file_request_chunks",
+        to: transfer.from,
+        id: transfer.id,
+        missing: missing.slice(0, 50),
+    });
+
+    resetIncomingWatchdog(transfer);
+}
+
+function finalizeIncomingTransfer(transfer) {
+    if (!transfer || transfer.finalized) return;
+    transfer.finalized = true;
+    if (transfer.watchdogTimer) clearTimeout(transfer.watchdogTimer);
 
     clearProgress();
     try {
@@ -1006,20 +1130,26 @@ function finalizeIncomingFile() {
         print(`${c.green}✓ File saved: ${savePath} (${humanSize(fileBuffer.length)})${c.reset}`);
     } catch (err) {
         print(`${c.red}Failed to save incoming file: ${err.message}${c.reset}`);
+    } finally {
+        incomingTransfers.delete(transfer.id);
+        if (incomingFile === transfer) incomingFile = null;
     }
 }
 
 function cleanupUserTransfers(peerName) {
-    if (incomingFile && incomingFile.from.toLowerCase() === peerName.toLowerCase()) {
-        clearProgress();
-        print(`${c.red}Transfer interrupted: ${peerName} left the room.${c.reset}`);
-        incomingFile = null;
+    for (const [id, t] of incomingTransfers.entries()) {
+        if (t.from.toLowerCase() === peerName.toLowerCase() && !t.finalized) {
+            clearProgress();
+            if (t.watchdogTimer) clearTimeout(t.watchdogTimer);
+            print(`${c.red}Transfer interrupted: ${peerName} left the room.${c.reset}`);
+            incomingTransfers.delete(id);
+            if (incomingFile === t) incomingFile = null;
+        }
     }
-    if (outgoingFile && outgoingFile.acceptedBy && outgoingFile.acceptedBy.toLowerCase() === peerName.toLowerCase()) {
-        if (outgoingFile.timer) clearTimeout(outgoingFile.timer);
-        clearProgress();
-        print(`${c.red}Transfer interrupted: ${peerName} left the room.${c.reset}`);
-        outgoingFile = null;
+    for (const [id, t] of outgoingTransfers.entries()) {
+        if (t.acceptedBy && typeof t.acceptedBy.delete === "function") {
+            t.acceptedBy.delete(peerName);
+        }
     }
 }
 
