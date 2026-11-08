@@ -318,7 +318,7 @@ wss.on("connection", (ws, request) => {
         clientInfo.msgCount = 0;
       }
       clientInfo.msgCount++;
-      if (clientInfo.msgCount > 75) {
+      if (clientInfo.msgCount > 800) {
         ws.send(JSON.stringify({ type: "error", code: "RATE_LIMITED", error: "Rate limit exceeded" }));
         return;
       }

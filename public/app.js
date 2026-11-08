@@ -70,7 +70,7 @@ const AVATAR_PALETTE = [
 
 // File Transfer Config
 const WEB_FILE_SLICE = 16 * 1024; // 16 KB raw payload per chunk (safe under 32KB/64KB frame limits)
-const WEB_CHUNK_PACE_MS = 60;      // 60ms pacing (~16 msgs/sec, safe under rate limits)
+const WEB_CHUNK_PACE_MS = 25;      // 25ms pacing (~40 msgs/sec, fast and smooth under 800/5s limit)
 
 // Initialization
 document.addEventListener("DOMContentLoaded", async () => {
@@ -292,6 +292,10 @@ function handleActionPacket(packet) {
       handleIncomingFileDone(packet);
       break;
 
+    case "file_request_chunks":
+      handlePeerFileRequestChunks(packet);
+      break;
+
     case "file_cancel":
       handlePeerFileCancel(packet);
       break;
@@ -500,7 +504,8 @@ async function sendFile(file) {
     payload: payloadBytes,
     compressed: isCompressed ? 1 : 0,
     totalChunks,
-    acceptedBy: null,
+    acceptedBy: new Set(),
+    isTransmitting: false,
     timer: null,
     cardEl: null,
   };
@@ -515,6 +520,7 @@ async function sendFile(file) {
 
   transfer.cardEl = renderOutgoingFileCard(transfer);
 
+  // 1. Broadcast file_offer to the entire room
   state.ws.send(JSON.stringify({
     type: "action",
     action: "file_offer",
@@ -523,55 +529,98 @@ async function sendFile(file) {
     size: file.size,
     compressed: transfer.compressed,
     totalChunks: transfer.totalChunks,
+    excludeSelf: true,
   }));
+
+  // 2. Wait 150ms for peers to register incoming transfer, then broadcast chunks to the room
+  transfer.timer = setTimeout(() => {
+    transmitOutgoingFile(transfer);
+  }, 150);
 }
 
 function handlePeerFileAccept(packet) {
   const transfer = state.outgoingTransfers[packet.id];
   if (!transfer) return;
   const peer = packet.fromUser || packet.user;
+  if (peer) transfer.acceptedBy.add(peer);
 
-  if (transfer.acceptedBy) {
-    state.ws.send(JSON.stringify({
-      type: "action",
-      action: "file_reject",
-      to: peer,
-      id: packet.id,
-      reason: "Already accepted by another user",
-    }));
-    return;
+  // If not yet transmitting, start transmission immediately
+  if (!transfer.isTransmitting) {
+    if (transfer.timer) clearTimeout(transfer.timer);
+    transmitOutgoingFile(transfer);
   }
-
-  transfer.acceptedBy = peer;
-  transmitOutgoingFile(transfer, peer);
 }
 
 function handlePeerFileReject(packet) {
+  // Selective rejection from a single user does not cancel room broadcast
   const transfer = state.outgoingTransfers[packet.id];
-  if (!transfer || transfer.acceptedBy) return;
+  if (!transfer) return;
   const peer = packet.fromUser || packet.user;
-  updateFileCardStatus(transfer.cardEl, `${peer} declined the file.`, 0);
-  delete state.outgoingTransfers[packet.id];
+  if (peer) transfer.acceptedBy.delete(peer);
 }
 
-function transmitOutgoingFile(transfer, recipient) {
+function handlePeerFileRequestChunks(packet) {
+  const transfer = state.outgoingTransfers[packet.id] || (state.recentOutgoingTransfers && state.recentOutgoingTransfers[packet.id]);
+  if (!transfer) return;
+  const peer = packet.fromUser || packet.user;
+  if (!peer || !Array.isArray(packet.missing)) return;
+
+  const payload = transfer.payload;
+  const totalChunks = transfer.totalChunks;
+
+  // Re-transmit requested missing chunks directly to this peer
+  for (const idx of packet.missing) {
+    if (!Number.isInteger(idx) || idx < 0 || idx >= totalChunks) continue;
+    const start = idx * WEB_FILE_SLICE;
+    const slice = payload.subarray(start, start + WEB_FILE_SLICE);
+    const b64 = uint8ToBase64(slice);
+
+    state.ws.send(JSON.stringify({
+      type: "action",
+      action: "file_chunk",
+      to: peer,
+      id: transfer.id,
+      i: idx,
+      index: idx,
+      n: totalChunks,
+      totalChunks: totalChunks,
+      d: b64,
+      data: b64,
+    }));
+  }
+
+  // Targeted done to signal end of retry batch
+  state.ws.send(JSON.stringify({
+    type: "action",
+    action: "file_done",
+    to: peer,
+    id: transfer.id,
+    totalChunks,
+  }));
+}
+
+function transmitOutgoingFile(transfer) {
+  if (transfer.isTransmitting) return;
+  transfer.isTransmitting = true;
+
   const payload = transfer.payload;
   const totalChunks = transfer.totalChunks;
   let chunkIndex = 0;
 
-  updateFileCardStatus(transfer.cardEl, `Sending to ${recipient}...`, 0);
+  updateFileCardStatus(transfer.cardEl, `Sending to room...`, 0);
 
   if (totalChunks === 0) {
     state.ws.send(JSON.stringify({
       type: "action",
       action: "file_done",
-      to: recipient,
       id: transfer.id,
+      totalChunks: 0,
+      excludeSelf: true,
     }));
     const regItem = state.fileRegistry[transfer.id];
     const isText = isTextFile(transfer.filename, regItem ? regItem.rawBytes : transfer.payload);
-    updateOutgoingFileCardDone(transfer.cardEl, `✓ Sent to ${recipient}`, transfer.id, transfer.filename, isText);
-    delete state.outgoingTransfers[transfer.id];
+    updateOutgoingFileCardDone(transfer.cardEl, `✓ Sent to room`, transfer.id, transfer.filename, isText);
+    scheduleTransferPruning(transfer.id);
     return;
   }
 
@@ -584,13 +633,14 @@ function transmitOutgoingFile(transfer, recipient) {
       state.ws.send(JSON.stringify({
         type: "action",
         action: "file_done",
-        to: recipient,
         id: transfer.id,
+        totalChunks,
+        excludeSelf: true,
       }));
       const regItem = state.fileRegistry[transfer.id];
       const isText = isTextFile(transfer.filename, regItem ? regItem.rawBytes : transfer.payload);
-      updateOutgoingFileCardDone(transfer.cardEl, `✓ Sent to ${recipient}`, transfer.id, transfer.filename, isText);
-      delete state.outgoingTransfers[transfer.id];
+      updateOutgoingFileCardDone(transfer.cardEl, `✓ Sent to room`, transfer.id, transfer.filename, isText);
+      scheduleTransferPruning(transfer.id);
       return;
     }
 
@@ -598,25 +648,40 @@ function transmitOutgoingFile(transfer, recipient) {
     const slice = payload.subarray(start, start + WEB_FILE_SLICE);
     const b64 = uint8ToBase64(slice);
 
+    // Broadcast chunk to entire room (no "to" parameter, excludeSelf: true)
     state.ws.send(JSON.stringify({
       type: "action",
       action: "file_chunk",
-      to: recipient,
       id: transfer.id,
       i: chunkIndex,
+      index: chunkIndex,
       n: totalChunks,
+      totalChunks: totalChunks,
       d: b64,
+      data: b64,
+      excludeSelf: true,
     }));
 
     chunkIndex++;
     const pct = Math.round((chunkIndex / totalChunks) * 100);
     const approxBytes = Math.min(transfer.size, Math.round((chunkIndex / totalChunks) * transfer.size));
-    updateFileCardStatus(transfer.cardEl, `Sending to ${recipient} (${humanSize(approxBytes)} / ${humanSize(transfer.size)})...`, pct);
+    updateFileCardStatus(transfer.cardEl, `Sending (${humanSize(approxBytes)} / ${humanSize(transfer.size)})...`, pct);
 
     transfer.timer = setTimeout(sendNextChunk, WEB_CHUNK_PACE_MS);
   }
 
   sendNextChunk();
+}
+
+function scheduleTransferPruning(id) {
+  if (!state.recentOutgoingTransfers) state.recentOutgoingTransfers = {};
+  if (state.outgoingTransfers[id]) {
+    state.recentOutgoingTransfers[id] = state.outgoingTransfers[id];
+  }
+  setTimeout(() => {
+    delete state.outgoingTransfers[id];
+    if (state.recentOutgoingTransfers) delete state.recentOutgoingTransfers[id];
+  }, 120_000); // Keep in memory for 2 minutes for chunk recovery requests
 }
 
 function handleIncomingFileOffer(packet) {
@@ -629,6 +694,9 @@ function handleIncomingFileOffer(packet) {
   const compressed = Boolean(packet.compressed);
   const totalChunks = Number(packet.totalChunks) || 0;
 
+  // Ignore duplicate offer if already finalized or in progress
+  if (state.incomingTransfers[id] && state.incomingTransfers[id].finalized) return;
+
   const transfer = {
     id,
     from: sender,
@@ -640,60 +708,36 @@ function handleIncomingFileOffer(packet) {
     receivedChunks: 0,
     cardEl: null,
     finalized: false,
+    watchdogTimer: null,
+    retryCount: 0,
   };
   state.incomingTransfers[id] = transfer;
 
   transfer.cardEl = renderIncomingFileCard(transfer);
   playChime("msg");
 
-  // Auto-accept transfer immediately
-  acceptIncomingFile(id);
-}
+  updateFileCardReceiving(transfer.cardEl, `Receiving from ${sender}...`);
 
-function acceptIncomingFile(transferId) {
-  const t = state.incomingTransfers[transferId];
-  if (!t) return;
-
-  state.ws.send(JSON.stringify({
-    type: "action",
-    action: "file_accept",
-    to: t.from,
-    id: t.id,
-  }));
-
-  updateFileCardReceiving(t.cardEl, `Receiving from ${t.from}...`);
-
-  if (t.size === 0 && t.totalChunks === 0) {
-    finalizeIncomingFile(t);
+  if (size === 0 && totalChunks === 0) {
+    finalizeIncomingFile(transfer);
+    return;
   }
-}
 
-function rejectIncomingFile(transferId) {
-  const t = state.incomingTransfers[transferId];
-  if (!t) return;
-
-  state.ws.send(JSON.stringify({
-    type: "action",
-    action: "file_reject",
-    to: t.from,
-    id: t.id,
-  }));
-
-  updateFileCardDone(t.cardEl, "Declined");
-  delete state.incomingTransfers[transferId];
+  resetIncomingWatchdog(transfer);
 }
 
 function handleIncomingFileChunk(packet) {
   const t = state.incomingTransfers[packet.id];
   const sender = packet.fromUser || packet.user;
-  if (!t || t.from.toLowerCase() !== (sender || "").toLowerCase()) return;
+  if (!t || t.finalized) return;
+  if (sender && t.from.toLowerCase() !== sender.toLowerCase()) return;
 
   const idx = Number(packet.index !== undefined ? packet.index : packet.i);
   const total = Number(packet.totalChunks !== undefined ? packet.totalChunks : packet.n);
   const b64 = String(packet.data !== undefined ? packet.data : (packet.d || ""));
 
   if (!Number.isInteger(idx) || idx < 0 || idx >= t.totalChunks || !b64) return;
-  if (t.chunks[idx] !== null) return; // already got this chunk
+  if (t.chunks[idx] !== null) return; // duplicate chunk
 
   const chunkBuf = base64ToUint8(b64);
   t.chunks[idx] = chunkBuf;
@@ -703,6 +747,8 @@ function handleIncomingFileChunk(packet) {
   const approxBytes = Math.min(t.size, Math.round((t.receivedChunks / t.totalChunks) * t.size));
   updateFileCardStatus(t.cardEl, `Receiving (${humanSize(approxBytes)} / ${humanSize(t.size)})...`, pct);
 
+  resetIncomingWatchdog(t);
+
   if (t.receivedChunks >= t.totalChunks) {
     finalizeIncomingFile(t);
   }
@@ -710,9 +756,60 @@ function handleIncomingFileChunk(packet) {
 
 function handleIncomingFileDone(packet) {
   const t = state.incomingTransfers[packet.id];
-  if (t && t.receivedChunks >= t.totalChunks) {
+  if (!t || t.finalized) return;
+
+  if (t.receivedChunks >= t.totalChunks) {
     finalizeIncomingFile(t);
+  } else {
+    requestMissingChunks(t);
   }
+}
+
+function resetIncomingWatchdog(t) {
+  if (t.watchdogTimer) clearTimeout(t.watchdogTimer);
+  if (t.finalized) return;
+
+  t.watchdogTimer = setTimeout(() => {
+    if (!t.finalized && t.receivedChunks < t.totalChunks) {
+      requestMissingChunks(t);
+    }
+  }, 2500);
+}
+
+function requestMissingChunks(t) {
+  if (!t || t.finalized || !state.ws || state.ws.readyState !== WebSocket.OPEN) return;
+  t.retryCount = (t.retryCount || 0) + 1;
+  if (t.retryCount > 5) {
+    if (t.watchdogTimer) clearTimeout(t.watchdogTimer);
+    updateFileCardStatus(t.cardEl, "Transfer incomplete (connection lost)", 100);
+    return;
+  }
+
+  const missing = [];
+  for (let i = 0; i < t.totalChunks; i++) {
+    if (t.chunks[i] === null) missing.push(i);
+  }
+
+  if (missing.length === 0) {
+    finalizeIncomingFile(t);
+    return;
+  }
+
+  updateFileCardStatus(
+    t.cardEl,
+    `Recovering ${missing.length} missing parts (retry ${t.retryCount})...`,
+    Math.round((t.receivedChunks / t.totalChunks) * 100)
+  );
+
+  state.ws.send(JSON.stringify({
+    type: "action",
+    action: "file_request_chunks",
+    to: t.from,
+    id: t.id,
+    missing: missing.slice(0, 50),
+  }));
+
+  resetIncomingWatchdog(t);
 }
 
 function handlePeerFileCancel(packet) {
@@ -785,10 +882,8 @@ function cleanupUserFileTransfers(peerName) {
     }
   }
   for (const [id, t] of Object.entries(state.outgoingTransfers)) {
-    if (t.acceptedBy === peerName) {
-      if (t.timer) clearTimeout(t.timer);
-      updateFileCardDone(t.cardEl, `${peerName} disconnected`);
-      delete state.outgoingTransfers[id];
+    if (t.acceptedBy && typeof t.acceptedBy.delete === "function") {
+      t.acceptedBy.delete(peerName);
     }
   }
 }
