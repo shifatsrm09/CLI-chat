@@ -115,6 +115,22 @@ body {
   flex-shrink: 0;
 }
 
+.brand-mark img {
+  width: 22px;
+  height: 22px;
+  object-fit: contain;
+  display: block;
+}
+
+.room-title-icon {
+  width: 18px;
+  height: 18px;
+  object-fit: contain;
+  flex-shrink: 0;
+  display: inline-block;
+  vertical-align: middle;
+}
+
 .brand-text h1 {
   font-size: 1.05rem;
   font-weight: 700;
