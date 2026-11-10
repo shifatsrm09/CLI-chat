@@ -7,6 +7,8 @@
     "start": "node client.js",
     "client": "node client.js",
     "dev": "node dev.js",
+    "gui": "gui.exe",
+    "build:gui": "g++ -O2 -mwindows gui.cpp -o gui.exe -lcomctl32 -lshell32 -lole32 -lcomdlg32",
     "build:dev:win": "pkg dev.js --targets node18-win-x64 --output dev",
     "build:dev:linux": "pkg dev.js --targets node18-linux-x64 --output dev-linux",
     "build:dev": "npm run build:dev:win && npm run build:dev:linux",

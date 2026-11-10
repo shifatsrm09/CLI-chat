@@ -4,6 +4,7 @@ client-win.exe
 dev
 dev.exe
 dev-linux
+gui_config.ini
 .env
 test.txt
 demo.txt

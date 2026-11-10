@@ -34,6 +34,23 @@ npm start
 npm run client
 ```
 
+### Running the Mini GUI (Close-to-Tray)
+
+You can launch the native Windows Mini GUI directly:
+
+```powershell
+.\gui.exe
+# or with flags
+.\gui.exe --user alice --room 6767
+# or via npm
+npm run gui
+```
+
+- **Close to Tray**: Clicking the **X** button hides the window into the Windows System Tray while keeping chat and background file transfers running.
+- **Restore**: Double-click the tray icon to bring the window back up.
+- **Tray Menu**: Right-click the tray icon for **Show**, **Hide**, **Send File...**, and **Exit**.
+- **Send File**: Use the `Send File...` button for a native file picker or type `/send <path>`.
+
 1. Choose your backend:
    - `syncplay_server`
    - `web_server`
