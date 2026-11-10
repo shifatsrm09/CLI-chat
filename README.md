@@ -1,98 +1,124 @@
-# CLI Chat
+<h1 align="center">CLI Chat</h1>
 
-```
-tinyurl.com/cli-chat0
-```
+<p align="center">
+  <strong>Terminal-native real-time messenger and instant edge file sharing.</strong>
+</p>
 
-A **terminal-based real-time chat and file sharing tool** designed for developer teams, university lab environments, and cross-platform terminal-to-web communication.
+<p align="center">
+  Lightweight room chat, private whispers, background auto-sync, and high-speed broadcast file transfers.<br>
+  Seamlessly connects native terminal CLI clients and web browser users on <a href="https://chat.cfat.site">chat.cfat.site</a> via Cloudflare edge relay.
+</p>
 
-The application runs in the **command line** (or as standalone Windows/Linux executables) and offers **two real-time backends**:
-1. **`syncplay_server`**: Connects via the Syncplay protocol (`syncplay.pl:8995`) with StartTLS encryption.
-2. **`web_server`**: Connects via the CFAT Cloudflare Edge Worker (`api.cfat.site`) with WebSockets, enabling seamless communication between CLI terminals and web browser users on **`chat.cfat.site`**.
+<p align="center">
+  <img alt="Version 2.1.0" src="https://img.shields.io/badge/version-2.1.0-5865F2">
+  <img alt="Node.js 18+" src="https://img.shields.io/badge/Node.js-18%2B-339933?logo=node.js&logoColor=white">
+  <img alt="GUI Win32 C++" src="https://img.shields.io/badge/GUI-Win32%20C%2B%2B-00599C?logo=cplusplus&logoColor=white">
+  <img alt="Windows & Linux" src="https://img.shields.io/badge/platform-Windows%20%7C%20Linux-0078D4">
+  <img alt="Cloudflare Edge" src="https://img.shields.io/badge/relay-Cloudflare%20Edge-F38020?logo=cloudflare&logoColor=white">
+</p>
 
----
+<p align="center">
+  <a href="https://github.com/shifatsrm09/CLI-chat/releases/latest/download/gui.exe" aria-label="Download CLI Chat GUI for Windows">
+    <img src="resources/download-button.svg" alt="Download GUI.exe" width="310" height="49">
+  </a>
+</p>
+
+<p align="center">
+  <a href="https://github.com/shifatsrm09/CLI-chat/releases/latest">All Releases &amp; Binaries</a>
+  · <a href="#features">Features</a>
+  · <a href="#quick-start">Quick Start</a>
+  · <a href="#gui--tray-mode">GUI &amp; Tray</a>
+  · <a href="#commands">Commands</a>
+</p>
+
+<br>
 
 ## Features
 
-- **Dual Backend Selection**:
-  - **`syncplay_server`**: Zero server hosting, 150-char auto-chunking, and room hosting/joining.
-  - **`web_server`**: Cloudflare Edge Worker (`api.cfat.site`), auto-connects to room **`6767`**, interoperable with web users on `chat.cfat.site`.
-- **Cross-Platform File Sharing (`/send`)**: Deflate compression, chunking, recipient acceptance prompts, and real-time progress bars in both Syncplay and Web Server modes.
-- **Private Whispers (`/w <user> <msg>`)**: Direct 1-to-1 targeted messaging.
-- **Dynamic Rooms (`/room [name]`)**: View your active room or switch rooms on the fly.
-- **Stealth Mode (`-s`)**: Run with `-s` to disable all terminal colors.
+- **Cross-Platform Interop:** Chat between command-line terminals and web browsers on [chat.cfat.site](https://chat.cfat.site) with zero configuration.
+- **High-Speed File Sharing (`/send`):** 16 KB chunked streaming, Deflate compression, and automatic packet drop recovery (`file_request_chunks`). Broadcasts to all room participants simultaneously.
+- **Target File Auto-Sync (`/target`):** Watches a local file for changes and auto-transmits the update to the room whenever you save in your editor.
+- **Close-to-Tray Native Host (`gui.exe`):** Native Windows C++ host that intercepts the window close button (`X` or Alt+F4) and minimizes to the System Tray, keeping transfers active in the background.
+- **Private Whispers (`/w`):** Direct 1-to-1 targeted messaging within any room.
+- **Dual Backend Support:** Connect via Cloudflare Edge Worker (`api.cfat.site`) or Syncplay TLS server (`syncplay.pl:8995`).
+- **Stealth Mode (`-s`):** Strips ANSI formatting for minimal or low-profile terminal use.
 
 ---
 
-## Setup and Run
+## Quick Start
 
-### Running with Node.js
+### Standalone Executables (No Node.js Required)
+
+Grab the latest standalone binary from [GitHub Releases](https://github.com/shifatsrm09/CLI-chat/releases/latest):
 
 ```powershell
-npm start
-# or
-npm run client
+# Windows Mini GUI with System Tray support
+.\gui.exe
+
+# Windows standalone terminal client
+.\client-win.exe
+# or dev client
+.\dev.exe
+
+# Linux standalone terminal client
+chmod +x client && ./client
 ```
 
-### Running the Mini GUI (Close-to-Tray)
-
-You can launch the native Windows Mini GUI directly:
+### Run from Source (Node.js)
 
 ```powershell
-.\gui.exe
-# or with flags
-.\gui.exe --user alice --room 6767
-# or via npm
+npm install
+
+# Start the interactive client
+npm start
+
+# Or run the dev client directly
+npm run dev
+
+# Or launch the native GUI host
 npm run gui
 ```
 
-- **Close to Tray**: Clicking the **X** button hides the window into the Windows System Tray while keeping chat and background file transfers running.
-- **Restore**: Double-click the tray icon to bring the window back up.
-- **Tray Menu**: Right-click the tray icon for **Show**, **Hide**, **Send File...**, and **Exit**.
-- **Send File**: Use the `Send File...` button for a native file picker or type `/send <path>`.
-
-1. Choose your backend:
-   - `syncplay_server`
-   - `web_server`
-2. Enter your **Username**.
-3. In `syncplay_server` mode, choose to **Host a room** or **Join a room**. In `web_server` mode, it automatically joins room **`6767`**.
-4. Start chatting!
-
-### Running Non-Interactively with Flags
+Non-interactive startup with command-line flags:
 
 ```powershell
-# Connect via web_server to room 6767
-node client.js --server web_server --user alice
-
-# Connect via syncplay_server to a custom room
-node client.js --server syncplay_server --user bob --room 9988
+node client.js --server web_server --user alice --room 6767
 ```
+
+---
+
+## GUI & Tray Mode
+
+`gui.exe` provides a native Win32 host wrapper for the terminal:
+
+- **Close to Tray:** Clicking the **X** button hides the console window into the Windows System Tray while keeping WebSocket connections and file transfers alive.
+- **Restore:** Double-click the tray icon to restore the terminal window instantly.
+- **Tray Menu:** Right-click the tray icon for **Open Terminal**, **Hide to Tray**, and **Exit cli-chat**.
 
 ---
 
 ## Commands
 
-- `/help` — Show available commands
-- `/list` — Show online users in the current room
-- `/room [name]` — Show current room or switch to another room
-- `/ls` — List files and folders in the current working directory
-- `/dir` — Show current working directory
-- `/send <path>` — Offer a file to the room
-- `/w <user> <msg>` — Send a private (whisper) message
-- `/quit` — Disconnect and exit
+| Command | Description |
+|:---|:---|
+| `/help` | Show available commands |
+| `/list` | List online users in the room |
+| `/room [name]` | Display active room or switch to a new room |
+| `/send <path>` | Send a file to everyone in the room |
+| `/target <path>` | Watch a file and auto-send whenever saved |
+| `/target off` | Stop watching the target file |
+| `/w <user> <msg>` | Send a private whisper message |
+| `/ls` | List files in current directory |
+| `/dir` | Print current working directory |
+| `/quit` | Disconnect and exit |
 
 ---
 
-## Standalone Executables
+## Currently Supported Platforms
 
-Pre-compiled binaries can be executed directly without Node.js installed:
-
-- **Windows**: `client-win.exe`
-- **Linux**: `./client`
-
-To build executables from source:
-
-```powershell
-npm run build:win    # packages client-win.exe
-npm run build:linux  # packages client (Linux x64)
-```
+| Platform | Executable | Status |
+|:---|:---|:---|
+| Windows x64 (GUI + Tray) | `gui.exe` | ✅ Available |
+| Windows x64 (CLI) | `client-win.exe`, `dev.exe` | ✅ Available |
+| Linux x64 (CLI) | `client`, `dev-linux` | ✅ Available |
+| Web Browser | [chat.cfat.site](https://chat.cfat.site) | ✅ Live |
