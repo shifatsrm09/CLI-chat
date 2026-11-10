@@ -1115,3 +1115,143 @@ body {
     flex-wrap: wrap;
   }
 }
+
+/* Chat surface: quiet room chrome, with the conversation carrying the focus. */
+#chat-screen {
+  max-width: 960px;
+  background: #0d1015;
+}
+
+.chat-header {
+  height: calc(60px + env(safe-area-inset-top, 0px));
+  padding-inline: 24px;
+  background: #11151a;
+}
+
+.nav-btn,
+.btn-text-action {
+  background: transparent;
+  border-color: #272d35;
+}
+
+.messages-stream {
+  padding: 28px max(24px, calc((100% - 720px) / 2));
+  gap: 16px;
+}
+
+.msg-row {
+  max-width: min(82%, 620px);
+  gap: 10px;
+}
+
+.msg-avatar {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: #252c34 !important;
+  color: #c7d0da;
+  font-size: 0.68rem;
+  font-weight: 600;
+}
+
+.msg-bubble-wrap {
+  gap: 5px;
+  min-width: 0;
+}
+
+.msg-meta {
+  gap: 7px;
+  font-size: 0.72rem;
+  color: #84909d;
+}
+
+.msg-bubble {
+  padding: 10px 14px;
+  border-radius: 4px 12px 12px 12px;
+  font-size: 0.9rem;
+  line-height: 1.55;
+}
+
+.msg-row.self .msg-bubble {
+  background: #293b4b;
+  border: 1px solid #354b5e;
+  color: #edf3f8;
+  border-radius: 12px 4px 12px 12px;
+}
+
+.msg-row.peer .msg-bubble {
+  background: #171c22;
+  border-color: #272e36;
+}
+
+.msg-row.whisper .msg-bubble {
+  background: #222a31 !important;
+  border-left: 2px solid #8b9cac !important;
+  color: #e1e8ee !important;
+}
+
+.whisper-badge {
+  background: transparent;
+  color: #9aa8b6;
+  font-size: 0.68rem;
+  font-weight: 600;
+  padding: 0;
+  text-transform: none;
+}
+
+.chat-footer {
+  padding: 16px 24px max(16px, env(safe-area-inset-bottom, 16px));
+  background: #11151a;
+  border-top-color: #242a31;
+}
+
+.composer-form {
+  max-width: 720px;
+  margin: 0 auto;
+  gap: 10px;
+}
+
+.composer-form input[type="text"] {
+  min-height: 44px;
+  padding: 11px 14px;
+  border-radius: 10px;
+  background: #0d1116;
+  border-color: #2a3139;
+  font-size: 0.9rem;
+}
+
+.composer-form input[type="text"]:focus {
+  border-color: #62788b;
+}
+
+.btn-attach,
+.btn-send {
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+}
+
+.btn-attach {
+  background: transparent;
+  border-color: transparent;
+}
+
+.btn-attach:hover {
+  border-color: #303943;
+}
+
+.btn-send {
+  background: #d5e0e8;
+  color: #17212a;
+}
+
+.btn-send:hover {
+  background: #edf3f7;
+}
+
+@media (max-width: 768px) {
+  .chat-header { padding-inline: 14px; }
+  .messages-stream { padding: 20px 14px; }
+  .msg-row { max-width: 90%; }
+  .chat-footer { padding-inline: 12px; }
+}
