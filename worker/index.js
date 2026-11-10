@@ -233,11 +233,12 @@ export class ChatRoom {
     const room = (url.searchParams.get("room") || "LOBBY").toUpperCase().trim().slice(0, 32);
     const game = (url.searchParams.get("game") || (room.startsWith("POKER-") ? "poker" : "chat")).toLowerCase();
     const role = (url.searchParams.get("role") || "player").toLowerCase();
+    const clientId = (url.searchParams.get("clientId") || url.searchParams.get("client_id") || "").trim();
 
     const pair = new WebSocketPair();
     const [clientWs, serverWs] = Object.values(pair);
 
-    await this.handleSession(serverWs, { username, room, game, role });
+    await this.handleSession(serverWs, { username, room, game, role, clientId });
 
     return new Response(null, {
       status: 101,
@@ -246,31 +247,47 @@ export class ChatRoom {
     });
   }
 
-  async handleSession(ws, { username, room, game, role }) {
+  async handleSession(ws, { username, room, game, role, clientId }) {
     ws.accept();
 
     const sessionId = crypto.randomUUID();
     const now = Date.now();
 
-    // Check if user is already connected in this room; cleanly prune old session
-    for (const [oldWs, oldInfo] of this.sessions.entries()) {
-      if (oldInfo.username.toLowerCase() === username.toLowerCase()) {
-        try {
-          oldWs.send(
-            JSON.stringify({
-              type: "system_notice",
-              message: "Connected from another session/tab. Closing duplicate session.",
-            })
-          );
-          oldWs.close(1000, "Reconnected elsewhere");
-        } catch (_) {}
-        this.sessions.delete(oldWs);
+    // Check if handle is already taken by another active participant in this room
+    const cleanLowerUser = username.toLowerCase();
+    for (const [existingWs, existingInfo] of this.sessions.entries()) {
+      if (existingInfo.username.toLowerCase() === cleanLowerUser) {
+        // If it is the exact same client instance reconnecting with its unique clientId, allow seamless session resumption
+        if (clientId && existingInfo.clientId && existingInfo.clientId === clientId) {
+          try {
+            existingWs.close(1000, "Reconnected elsewhere");
+          } catch (_) {}
+          this.sessions.delete(existingWs);
+          break;
+        }
+
+        // If the existing user is actively connected, REJECT the newcomer!
+        if (existingWs.readyState === 1 /* OPEN */) {
+          this.sendJson(ws, {
+            type: "error",
+            code: "USERNAME_TAKEN",
+            error: `Handle "${username}" is already in use in room ${room}. Please choose a different handle.`,
+          });
+          try {
+            ws.close(4003, "Username already taken");
+          } catch (_) {}
+          return;
+        } else {
+          // Stale / closed session, prune it
+          this.sessions.delete(existingWs);
+        }
       }
     }
 
     // Register new session
     const sessionInfo = {
       id: sessionId,
+      clientId,
       username,
       room,
       game,
@@ -405,8 +422,15 @@ export class ChatRoom {
     });
 
     // Cleanup on disconnect
+    let cleanedUp = false;
     const cleanup = () => {
+      if (cleanedUp) return;
+      cleanedUp = true;
+
+      // Only broadcast user_left if this session was actually registered
+      if (!this.sessions.has(ws)) return;
       this.sessions.delete(ws);
+
       const remainingUsers = Array.from(this.sessions.values()).map((s) => s.username);
 
       // Re-assign host if the host disconnected

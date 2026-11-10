@@ -8,6 +8,9 @@
 const state = {
   room: "",
   username: "",
+  clientId: "web-" + Math.random().toString(36).slice(2, 10) + Date.now().toString(36),
+  usernameTaken: false,
+  hasJoinedRoom: false,
   ws: null,
   wsUrl: "",
   participants: [],
@@ -173,8 +176,19 @@ function enterRoom(room, user) {
   connectWebSocket();
 }
 
+let pingTimer = null;
+
 function connectWebSocket() {
   setStatus("connecting", "Connecting...");
+
+  // Cleanly close any pre-existing socket to prevent duplicate events
+  if (state.ws) {
+    state.ws.onclose = null;
+    state.ws.onerror = null;
+    state.ws.onmessage = null;
+    try { state.ws.close(); } catch (_) {}
+    state.ws = null;
+  }
 
   let targetWs = state.wsUrl;
   if (!targetWs) {
@@ -186,7 +200,7 @@ function connectWebSocket() {
     }
   }
 
-  const endpoint = `${targetWs}?room=${encodeURIComponent(state.room)}&user=${encodeURIComponent(state.username)}&game=chat`;
+  const endpoint = `${targetWs}?room=${encodeURIComponent(state.room)}&user=${encodeURIComponent(state.username)}&clientId=${encodeURIComponent(state.clientId)}&game=chat`;
 
   try {
     state.ws = new WebSocket(endpoint);
@@ -198,7 +212,18 @@ function connectWebSocket() {
 
   state.ws.onopen = () => {
     state.reconnectAttempts = 0;
+    state.usernameTaken = false;
     setStatus("connected", "Connected");
+
+    // Periodic 20s keepalive ping to prevent Cloudflare edge timeouts
+    if (pingTimer) clearInterval(pingTimer);
+    pingTimer = setInterval(() => {
+      if (state.ws && state.ws.readyState === WebSocket.OPEN) {
+        try {
+          state.ws.send(JSON.stringify({ type: "ping" }));
+        } catch (_) {}
+      }
+    }, 20000);
   };
 
   state.ws.onmessage = (event) => {
@@ -210,7 +235,24 @@ function connectWebSocket() {
     }
   };
 
-  state.ws.onclose = () => {
+  state.ws.onclose = (event) => {
+    if (pingTimer) {
+      clearInterval(pingTimer);
+      pingTimer = null;
+    }
+
+    if (event.code === 4003 || state.usernameTaken) {
+      state.reconnectAttempts = 0;
+      setStatus("offline", "Handle Taken");
+      elements.chatScreen.classList.remove("active");
+      elements.lobbyScreen.classList.add("active");
+      showToast(`Handle "${state.username}" is already in use in room ${state.room}. Please choose a different handle.`);
+      elements.joinUserInput.focus();
+      elements.joinUserInput.select();
+      state.room = "";
+      return;
+    }
+
     if (!state.room) return;
     setStatus("offline", "Disconnected");
     if (state.reconnectAttempts < state.maxReconnectAttempts) {
@@ -218,7 +260,7 @@ function connectWebSocket() {
       const delay = Math.min(1000 * Math.pow(1.5, state.reconnectAttempts), 8000);
       setStatus("connecting", `Reconnecting in ${Math.round(delay / 1000)}s...`);
       setTimeout(() => {
-        if (state.room) connectWebSocket();
+        if (state.room && !state.usernameTaken) connectWebSocket();
       }, delay);
     }
   };
@@ -232,7 +274,10 @@ function handleIncomingPacket(packet) {
   switch (packet.type) {
     case "room_state":
       updateParticipants(packet.users || []);
-      renderSystemMessage(`Joined room ${packet.room}`);
+      if (!state.hasJoinedRoom || state.room !== packet.room) {
+        renderSystemMessage(`Joined room ${packet.room}`);
+        state.hasJoinedRoom = true;
+      }
       break;
 
     case "user_joined":
@@ -245,6 +290,16 @@ function handleIncomingPacket(packet) {
       updateParticipants(packet.users || []);
       renderSystemMessage(`${packet.user} left the room`);
       cleanupUserFileTransfers(packet.user);
+      break;
+
+    case "error":
+      if (packet.code === "USERNAME_TAKEN") {
+        state.usernameTaken = true;
+        showToast(packet.error || "Handle already taken in this room.");
+        renderSystemMessage(`[Error] ${packet.error || "Handle already taken."}`);
+      } else {
+        showToast(packet.error || "An error occurred");
+      }
       break;
 
     case "chat":
@@ -1201,8 +1256,18 @@ function setStatus(type, label) {
 
 function leaveRoom() {
   state.room = "";
+  state.hasJoinedRoom = false;
+  state.usernameTaken = false;
+  state.reconnectAttempts = 0;
+
+  if (pingTimer) {
+    clearInterval(pingTimer);
+    pingTimer = null;
+  }
+
   if (state.ws) {
-    state.ws.close();
+    state.ws.onclose = null;
+    try { state.ws.close(); } catch (_) {}
     state.ws = null;
   }
 

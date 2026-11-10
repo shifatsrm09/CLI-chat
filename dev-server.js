@@ -236,6 +236,7 @@ wss.on("connection", (ws, request) => {
   const username = sanitizeUsername(rawUser);
   const game = (url.searchParams.get("game") || (room.startsWith("POKER-") ? "poker" : "chat")).toLowerCase();
   const role = (url.searchParams.get("role") || "player").toLowerCase();
+  const clientId = (url.searchParams.get("clientId") || url.searchParams.get("client_id") || "").trim();
 
   if (!rooms.has(room)) {
     rooms.set(room, {
@@ -247,19 +248,37 @@ wss.on("connection", (ws, request) => {
   const roomData = rooms.get(room);
   const now = Date.now();
 
-  // Prune any existing session with the same username in this room
+  // Check if handle is already taken by another active participant in this room
+  const cleanLowerUser = username.toLowerCase();
   for (const existing of roomData.clients) {
-    if (existing.username.toLowerCase() === username.toLowerCase()) {
-      try {
-        existing.ws.send(JSON.stringify({ type: "system_notice", message: "Duplicate session pruned" }));
-        existing.ws.close(1000, "Reconnected elsewhere");
-      } catch (_) {}
-      roomData.clients.delete(existing);
+    if (existing.username.toLowerCase() === cleanLowerUser) {
+      if (clientId && existing.clientId && existing.clientId === clientId) {
+        try {
+          existing.ws.close(1000, "Reconnected elsewhere");
+        } catch (_) {}
+        roomData.clients.delete(existing);
+        break;
+      }
+
+      if (existing.ws.readyState === 1) {
+        ws.send(JSON.stringify({
+          type: "error",
+          code: "USERNAME_TAKEN",
+          error: `Handle "${username}" is already taken in room ${room}. Please choose a different handle.`,
+        }));
+        try {
+          ws.close(4003, "Username already taken");
+        } catch (_) {}
+        return;
+      } else {
+        roomData.clients.delete(existing);
+      }
     }
   }
 
   const clientInfo = {
     ws,
+    clientId,
     username,
     room,
     game,
@@ -383,7 +402,11 @@ wss.on("connection", (ws, request) => {
     }
   });
 
+  let cleanedUp = false;
   const cleanup = () => {
+    if (cleanedUp) return;
+    cleanedUp = true;
+    if (!roomData.clients.has(clientInfo)) return;
     roomData.clients.delete(clientInfo);
     if (roomData.clients.size === 0) {
       rooms.delete(room);
