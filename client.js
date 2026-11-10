@@ -109,6 +109,9 @@ let retryCount       = 0;
 let nextMsgCounter   = 0;
 let pendingListPrint = false;
 
+const CLIENT_INSTANCE_ID = "cli-" + Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
+let usernameTaken    = false;
+
 /** Online users in the current room */
 const roomUsers = new Set();
 
@@ -465,7 +468,7 @@ function connectWeb(isReconnect = false) {
         handleConnectionDrop(attempt, "Connection to api.cfat.site timed out");
     }, CONNECT_TIMEOUT_MS);
 
-    const wsUrl = `${CFAT_WS_URL}?room=${encodeURIComponent(room)}&user=${encodeURIComponent(username)}&game=chat`;
+    const wsUrl = `${CFAT_WS_URL}?room=${encodeURIComponent(room)}&user=${encodeURIComponent(username)}&clientId=${encodeURIComponent(CLIENT_INSTANCE_ID)}&game=chat`;
 
     try {
         const ws = new WebSocketClient(wsUrl);
@@ -479,6 +482,7 @@ function connectWeb(isReconnect = false) {
             }
             attempt.completed = true;
             connected = true;
+            usernameTaken = false;
             retryCount = 0;
 
             roomUsers.clear();
@@ -514,6 +518,13 @@ function connectWeb(isReconnect = false) {
 
         const onClose = (code, reason) => {
             if (connectionAttempt !== attempt) return;
+            if (code === 4003 || usernameTaken) {
+                finishProgressBar();
+                cleanupConnection();
+                print(`${c.red}[System] Handle "${username}" is already in use in room ${room}.${c.reset}`);
+                promptRename();
+                return;
+            }
             const rStr = reason ? ` (${reason})` : "";
             handleConnectionDrop(attempt, `Disconnected from api.cfat.site${rStr}`);
         };
@@ -633,9 +644,42 @@ function handleWebFrame(attempt, raw) {
     }
 
     if (msg.type === "error") {
+        if (msg.code === "USERNAME_TAKEN") {
+            usernameTaken = true;
+        }
         print(`${c.red}[Error] ${msg.error || msg.message || "Server error"}${c.reset}`);
         return;
     }
+}
+
+function promptRename() {
+    usernameTaken = false;
+    if (reconnectTimer) {
+        clearTimeout(reconnectTimer);
+        reconnectTimer = null;
+    }
+    if (!rl) {
+        askQuestion(`${c.bold}Enter a different handle: ${c.reset}`).then((ans) => {
+            const clean = sanitizeUsername(ans);
+            if (clean) {
+                username = clean;
+                connect();
+            } else {
+                promptRename();
+            }
+        });
+        return;
+    }
+    rl.question(`\n${c.bold}Enter a different handle: ${c.reset}`, (ans) => {
+        const clean = sanitizeUsername(ans);
+        if (clean) {
+            username = clean;
+            updatePrompt();
+            connect();
+        } else {
+            promptRename();
+        }
+    });
 }
 
 function handleWebActionPayload(msg) {

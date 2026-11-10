@@ -82,6 +82,9 @@ let room             = getArgValue("--room") || getArgValue("-r") || "";
 let webSocket        = null;
 let webPingTimer     = null;
 
+const CLIENT_INSTANCE_ID = "cli-" + Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
+let usernameTaken    = false;
+
 let connected        = false;
 let quitting         = false;
 let rl               = null;
@@ -255,7 +258,7 @@ function connect(isReconnect = false) {
         handleConnectionDrop(attempt, "Connection to api.cfat.site timed out");
     }, CONNECT_TIMEOUT_MS);
 
-    const wsUrl = `${CFAT_WS_URL}?room=${encodeURIComponent(room)}&user=${encodeURIComponent(username)}&game=chat`;
+    const wsUrl = `${CFAT_WS_URL}?room=${encodeURIComponent(room)}&user=${encodeURIComponent(username)}&clientId=${encodeURIComponent(CLIENT_INSTANCE_ID)}&game=chat`;
 
     try {
         const ws = new WebSocketClient(wsUrl);
@@ -274,6 +277,7 @@ function connect(isReconnect = false) {
             }
 
             connected = true;
+            usernameTaken = false;
             retryCount = 0;
             finishConnectProgress();
 
@@ -303,6 +307,13 @@ function connect(isReconnect = false) {
         ws.on("close", (code, reason) => {
             if (connectionAttempt === attempt) {
                 const textReason = reason ? reason.toString() : `code ${code}`;
+                if (code === 4003 || usernameTaken) {
+                    finishConnectProgress();
+                    cleanupConnection();
+                    print(`${c.red}[System] Handle "${username}" is already in use in room ${room}.${c.reset}`);
+                    promptRename();
+                    return;
+                }
                 handleConnectionDrop(attempt, textReason);
             }
         });
@@ -414,8 +425,41 @@ function handleWebFrame(attempt, raw) {
 
     // 8. Server Error
     if (msg.type === "error") {
+        if (msg.code === "USERNAME_TAKEN") {
+            usernameTaken = true;
+        }
         print(`${c.red}[Error] ${msg.error || msg.message || "Server error"}${c.reset}`);
     }
+}
+
+function promptRename() {
+    usernameTaken = false;
+    if (reconnectTimer) {
+        clearTimeout(reconnectTimer);
+        reconnectTimer = null;
+    }
+    if (!rl) {
+        askQuestion(`${c.bold}Enter a different handle: ${c.reset}`).then((ans) => {
+            const clean = sanitizeUsername(ans);
+            if (clean) {
+                username = clean;
+                connect();
+            } else {
+                promptRename();
+            }
+        });
+        return;
+    }
+    rl.question(`\n${c.bold}Enter a different handle: ${c.reset}`, (ans) => {
+        const clean = sanitizeUsername(ans);
+        if (clean) {
+            username = clean;
+            rl.setPrompt(`${c.bold}${c.green}${username}${c.reset}: `);
+            connect();
+        } else {
+            promptRename();
+        }
+    });
 }
 
 function handleWebActionPayload(msg) {
