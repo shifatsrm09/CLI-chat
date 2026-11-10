@@ -9,3 +9,5 @@ gui_config.ini
 test.txt
 demo.txt
 gui.exe
+build
+build/

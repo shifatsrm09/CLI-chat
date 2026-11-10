@@ -1,14 +1,15 @@
 /**
- * CLI Chat - Native Console Host with System Tray Integration
+ * CLI Chat - Standalone Native Console Host with System Tray Integration
  *
- * Runs dev.js directly in a true native Windows Console:
- *  - 100% authentic CMD line-by-line terminal input & execution
- *  - Full TTY support (smooth animated progress bars, clearLine, ANSI colors)
- *  - All commands (/target, /ls, /help, /send, /w, /room) work natively with zero glitches
- *  - No prompt duplication (rootgui: CFAT: hi will never happen)
- *  - Clicking 'X' (close) or Alt+F4 intercepts the event and hides to System Tray
+ * Fully self-contained single executable:
+ *  - Zero runtime dependencies (MinGW runtime statically linked, payload embedded)
+ *  - Works on any clean Windows PC without needing Node.js or external files
+ *  - Automatic embedded payload extraction with instant caching in %LOCALAPPDATA%\cli-chat
+ *  - Single-instance protection: double-clicking gui.exe when already running restores the existing session
+ *  - Native Windows Console with full ANSI colors, cursor movement, and smooth animated progress bars
+ *  - Intercepts 'X' (close) and Alt+F4 to hide to Windows System Tray
  *  - Double-click tray icon to restore the terminal window
- *  - Right-click tray menu: "Open Terminal", "Hide to Tray", "Exit cli-chat"
+ *  - Right-click tray menu: "Show Terminal", "Hide to Tray", "Exit cli-chat"
  */
 
 #ifndef UNICODE
@@ -23,8 +24,6 @@
 #include <shellapi.h>
 #include <string>
 #include <vector>
-#include <thread>
-#include <atomic>
 
 #pragma comment(lib, "shell32.lib")
 
@@ -34,6 +33,7 @@
 #define ID_TRAY_EXIT     2004
 
 #define WM_APP_TRAY      (WM_APP + 1)
+#define IDR_EMBEDDED_DEV 101
 
 /* ─── Global State ───────────────────────────────────────────────────────── */
 static HINSTANCE        g_hInstance     = NULL;
@@ -44,28 +44,158 @@ static HHOOK            g_hKbdHook      = NULL;
 static NOTIFYICONDATAW  g_nid           = {0};
 static bool             g_bTrayActive   = false;
 static bool             g_bExiting      = false;
+static HANDLE           g_hSingleMutex  = NULL;
 
 static HANDLE           g_hChildProcess = NULL;
-static std::thread*     g_pWaitThread   = nullptr;
+static HANDLE           g_hWaitThread   = NULL;
 
 /* ─── Forward Declarations ───────────────────────────────────────────────── */
 LRESULT CALLBACK TrayHostWndProc(HWND, UINT, WPARAM, LPARAM);
 LRESULT CALLBACK LowLevelMouseProc(int nCode, WPARAM wParam, LPARAM lParam);
 LRESULT CALLBACK LowLevelKeyboardProc(int nCode, WPARAM wParam, LPARAM lParam);
+DWORD WINAPI ChildWatcherThread(LPVOID);
 void ShowConsole(bool show);
 void ShowTrayBalloon(const std::wstring& title, const std::wstring& msg);
 void Cleanup();
+bool FileExists(const std::wstring& path);
+std::wstring ResolveOrExtractEngine(HINSTANCE hInstance, const std::wstring& appDir);
+bool ExtractResourceToFile(HINSTANCE hInstance, int resId, const std::wstring& destPath);
+
+/* ─── Helper: File Existence Check ───────────────────────────────────────── */
+bool FileExists(const std::wstring& path) {
+    DWORD attr = GetFileAttributesW(path.c_str());
+    return (attr != INVALID_FILE_ATTRIBUTES && !(attr & FILE_ATTRIBUTE_DIRECTORY));
+}
+
+/* ─── Helper: Extract Resource to File ───────────────────────────────────── */
+bool ExtractResourceToFile(HINSTANCE hInstance, int resId, const std::wstring& destPath) {
+    HRSRC hRes = FindResourceW(hInstance, MAKEINTRESOURCEW(resId), RT_RCDATA);
+    if (!hRes) return false;
+
+    HGLOBAL hLoaded = LoadResource(hInstance, hRes);
+    if (!hLoaded) return false;
+
+    DWORD resSize = SizeofResource(hInstance, hRes);
+    void* pData = LockResource(hLoaded);
+    if (!pData || resSize == 0) return false;
+
+    // Fast check: if existing file matches exact resource size, avoid re-writing
+    HANDLE hExisting = CreateFileW(destPath.c_str(), GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
+    if (hExisting != INVALID_HANDLE_VALUE) {
+        LARGE_INTEGER fSize;
+        if (GetFileSizeEx(hExisting, &fSize) && (DWORD)fSize.QuadPart == resSize) {
+            CloseHandle(hExisting);
+            return true;
+        }
+        CloseHandle(hExisting);
+    }
+
+    HANDLE hOut = CreateFileW(destPath.c_str(), GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (hOut == INVALID_HANDLE_VALUE) {
+        return false;
+    }
+
+    DWORD written = 0;
+    BOOL ok = WriteFile(hOut, pData, resSize, &written, NULL);
+    CloseHandle(hOut);
+
+    return (ok && written == resSize);
+}
+
+/* ─── Helper: Resolve Chat Engine or Extract Embedded Payload ────────────── */
+std::wstring ResolveOrExtractEngine(HINSTANCE hInstance, const std::wstring& appDir) {
+    // 1. Companion dev.exe next to gui.exe
+    if (FileExists(appDir + L"dev.exe")) {
+        return L"\"" + appDir + L"dev.exe\"";
+    }
+
+    // 2. dev.exe in build/ folder (project repo)
+    if (FileExists(appDir + L"build\\dev.exe")) {
+        return L"\"" + appDir + L"build\\dev.exe\"";
+    }
+
+    // 3. Extract embedded payload to %LOCALAPPDATA%\cli-chat\dev.exe
+    wchar_t localApp[MAX_PATH] = {0};
+    if (GetEnvironmentVariableW(L"LOCALAPPDATA", localApp, MAX_PATH) > 0) {
+        std::wstring cacheDir = std::wstring(localApp) + L"\\cli-chat";
+        CreateDirectoryW(cacheDir.c_str(), NULL);
+        std::wstring cachePath = cacheDir + L"\\dev.exe";
+        if (ExtractResourceToFile(hInstance, IDR_EMBEDDED_DEV, cachePath)) {
+            return L"\"" + cachePath + L"\"";
+        }
+    }
+
+    // 4. Fallback extraction to %TEMP%\cli-chat\dev.exe
+    wchar_t tempPath[MAX_PATH] = {0};
+    if (GetTempPathW(MAX_PATH, tempPath) > 0) {
+        std::wstring cacheDir = std::wstring(tempPath) + L"cli-chat";
+        CreateDirectoryW(cacheDir.c_str(), NULL);
+        std::wstring cachePath = cacheDir + L"\\dev.exe";
+        if (ExtractResourceToFile(hInstance, IDR_EMBEDDED_DEV, cachePath)) {
+            return L"\"" + cachePath + L"\"";
+        }
+    }
+
+    // 5. Companion client-win.exe
+    if (FileExists(appDir + L"client-win.exe")) {
+        return L"\"" + appDir + L"client-win.exe\"";
+    }
+
+    // 6. Node.js developer fallback
+    if (FileExists(appDir + L"dev.js")) {
+        return L"node.exe \"" + appDir + L"dev.js\"";
+    }
+    if (FileExists(appDir + L"..\\dev.js")) {
+        return L"node.exe \"" + appDir + L"..\\dev.js\"";
+    }
+
+    return L"";
+}
+
+/* ─── Child Watcher Thread ───────────────────────────────────────────────── */
+DWORD WINAPI ChildWatcherThread(LPVOID) {
+    if (g_hChildProcess) {
+        WaitForSingleObject(g_hChildProcess, INFINITE);
+    }
+    if (!g_bExiting && g_hWndHost) {
+        PostMessageW(g_hWndHost, WM_CLOSE, 0, 0);
+    }
+    return 0;
+}
 
 /* ─── Entry Point ────────────────────────────────────────────────────────── */
 int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow) {
     g_hInstance = hInstance;
 
-    // 1. Allocate dedicated native Windows Console
+    // 1. Single Instance Protection: restore existing session if already running
+    g_hSingleMutex = CreateMutexW(NULL, FALSE, L"Local\\CLIChatSingleInstanceMutex");
+    if (GetLastError() == ERROR_ALREADY_EXISTS) {
+        HWND hWndExisting = FindWindowW(L"CLIChatTrayHostClass", L"CLIChatHost");
+        if (hWndExisting) {
+            PostMessageW(hWndExisting, WM_APP_TRAY, 0, WM_LBUTTONDBLCLK);
+        }
+        if (g_hSingleMutex) CloseHandle(g_hSingleMutex);
+        return 0;
+    }
+
+    // 2. Allocate dedicated native Windows Console
     AllocConsole();
     g_hConsole = GetConsoleWindow();
 
+    // Load custom app icon from resources (falls back to IDI_APPLICATION if missing)
+    HICON hAppIcon = (HICON)LoadImageW(hInstance, MAKEINTRESOURCEW(1), IMAGE_ICON, 0, 0, LR_DEFAULTSIZE | LR_SHARED);
+    if (!hAppIcon) {
+        hAppIcon = LoadIconW(NULL, IDI_APPLICATION);
+    }
+    HICON hAppIconSmall = (HICON)LoadImageW(hInstance, MAKEINTRESOURCEW(1), IMAGE_ICON, 16, 16, LR_SHARED);
+    if (!hAppIconSmall) {
+        hAppIconSmall = hAppIcon;
+    }
+
     if (g_hConsole) {
-        SetConsoleTitleW(L"cli-chat (dev)");
+        SetConsoleTitleW(L"cli-chat");
+        SendMessageW(g_hConsole, WM_SETICON, ICON_BIG, (LPARAM)hAppIcon);
+        SendMessageW(g_hConsole, WM_SETICON, ICON_SMALL, (LPARAM)hAppIconSmall);
 
         // Enable native ANSI escape codes and line editing in Windows Console
         HANDLE hOut = GetStdHandle(STD_OUTPUT_HANDLE);
@@ -87,11 +217,13 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow) {
         }
     }
 
-    // 2. Create hidden message-only window for Tray notifications & menu
+    // 3. Create hidden message-only window for Tray notifications & menu
     WNDCLASSEXW wc = { sizeof(wc) };
     wc.lpfnWndProc   = TrayHostWndProc;
     wc.hInstance     = hInstance;
     wc.lpszClassName = L"CLIChatTrayHostClass";
+    wc.hIcon         = hAppIcon;
+    wc.hIconSm       = hAppIconSmall;
 
     RegisterClassExW(&wc);
 
@@ -103,23 +235,23 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow) {
         HWND_MESSAGE, NULL, hInstance, NULL
     );
 
-    // 3. Setup System Tray Icon
+    // 4. Setup System Tray Icon
     memset(&g_nid, 0, sizeof(g_nid));
     g_nid.cbSize           = sizeof(g_nid);
     g_nid.hWnd             = g_hWndHost;
     g_nid.uID              = ID_TRAY_ICON;
     g_nid.uFlags           = NIF_ICON | NIF_MESSAGE | NIF_TIP;
     g_nid.uCallbackMessage = WM_APP_TRAY;
-    g_nid.hIcon            = LoadIcon(NULL, IDI_APPLICATION);
-    wcscpy_s(g_nid.szTip, L"cli-chat (dev)");
+    g_nid.hIcon            = hAppIconSmall;
+    wcscpy_s(g_nid.szTip, L"cli-chat");
     Shell_NotifyIconW(NIM_ADD, &g_nid);
     g_bTrayActive = true;
 
-    // 4. Install Low-Level Mouse & Keyboard Hooks to intercept 'X' and Alt+F4
+    // 5. Install Low-Level Mouse & Keyboard Hooks to intercept 'X' and Alt+F4
     g_hMouseHook = SetWindowsHookExW(WH_MOUSE_LL, LowLevelMouseProc, GetModuleHandle(NULL), 0);
     g_hKbdHook   = SetWindowsHookExW(WH_KEYBOARD_LL, LowLevelKeyboardProc, GetModuleHandle(NULL), 0);
 
-    // 5. Build command line forwarding all CLI arguments to dev.js
+    // 6. Forward any CLI arguments passed to gui.exe
     std::wstring cmdArgs;
     int argc = 0;
     LPWSTR* argv = CommandLineToArgvW(GetCommandLineW(), &argc);
@@ -131,16 +263,38 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow) {
         LocalFree(argv);
     }
 
-    std::wstring cmdLine = L"node.exe dev.js";
-    if (!cmdArgs.empty()) {
-        cmdLine += L" " + cmdArgs;
+    // Determine current executable directory
+    wchar_t exePath[MAX_PATH] = {0};
+    GetModuleFileNameW(NULL, exePath, MAX_PATH);
+    std::wstring appDir = exePath;
+    size_t lastSlash = appDir.find_last_of(L"\\/");
+    if (lastSlash != std::wstring::npos) {
+        appDir = appDir.substr(0, lastSlash + 1);
+    } else {
+        appDir = L".\\";
     }
 
-    // 6. Spawn node.exe dev.js attached directly to this console
+    // Resolve or extract the chat engine
+    std::wstring targetCmd = ResolveOrExtractEngine(hInstance, appDir);
+
+    if (targetCmd.empty()) {
+        MessageBoxW(NULL,
+            L"Could not launch chat engine.\n\nPlease check your Windows temp or local app data permissions.",
+            L"CLI Chat - Error",
+            MB_ICONERROR | MB_OK);
+        Cleanup();
+        return 1;
+    }
+
+    if (!cmdArgs.empty()) {
+        targetCmd += L" " + cmdArgs;
+    }
+
+    // 7. Spawn child process attached directly to this console
     STARTUPINFOW si = { sizeof(si) };
     PROCESS_INFORMATION pi = {0};
 
-    std::vector<wchar_t> cmdBuf(cmdLine.begin(), cmdLine.end());
+    std::vector<wchar_t> cmdBuf(targetCmd.begin(), targetCmd.end());
     cmdBuf.push_back(L'\0');
 
     // Inherit console handles directly so process.stdout.isTTY == true!
@@ -150,29 +304,29 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow) {
         NULL,
         NULL,
         TRUE,
-        0, // Standard creation attached to the current console
+        0,
         NULL,
-        NULL,
+        appDir.c_str(), // Working directory is where user launched gui.exe
         &si,
         &pi
     );
 
-    if (success) {
-        g_hChildProcess = pi.hProcess;
-        CloseHandle(pi.hThread);
-
-        // Background thread waits for dev.js to exit (e.g. user typed /quit)
-        g_pWaitThread = new std::thread([]() {
-            if (g_hChildProcess) {
-                WaitForSingleObject(g_hChildProcess, INFINITE);
-            }
-            if (!g_bExiting && g_hWndHost) {
-                PostMessageW(g_hWndHost, WM_CLOSE, 0, 0);
-            }
-        });
+    if (!success) {
+        DWORD err = GetLastError();
+        wchar_t errMsg[512];
+        swprintf_s(errMsg, 512, L"Failed to start CLI chat:\n%s\n\nWindows Error Code: %lu", targetCmd.c_str(), err);
+        MessageBoxW(NULL, errMsg, L"CLI Chat - Launch Error", MB_ICONERROR | MB_OK);
+        Cleanup();
+        return 1;
     }
 
-    // 7. Message Loop for Tray Icon events and hooks
+    g_hChildProcess = pi.hProcess;
+    CloseHandle(pi.hThread);
+
+    // 8. Background thread waits for child to exit (e.g. user typed /quit)
+    g_hWaitThread = CreateThread(NULL, 0, ChildWatcherThread, NULL, 0, NULL);
+
+    // 9. Message Loop for Tray Icon events and hooks
     MSG msg;
     while (GetMessageW(&msg, NULL, 0, 0)) {
         TranslateMessage(&msg);
@@ -192,7 +346,7 @@ void ShowConsole(bool show) {
         SetForegroundWindow(g_hConsole);
     } else {
         ShowWindow(g_hConsole, SW_HIDE);
-        ShowTrayBalloon(L"cli-chat (dev)", L"cli-chat is running in the background. Double-click tray icon to reopen.");
+        ShowTrayBalloon(L"cli-chat", L"cli-chat is running in the background. Double-click tray icon to reopen.");
     }
 }
 
@@ -208,7 +362,7 @@ LRESULT CALLBACK LowLevelMouseProc(int nCode, WPARAM wParam, LPARAM lParam) {
                 if (hit == HTCLOSE) {
                     // Intercept 'X' click -> Hide to System Tray!
                     ShowConsole(false);
-                    return 1; // Drop the mouse click so ConHost does not close!
+                    return 1; // Drop mouse click so ConHost does not terminate!
                 }
             }
         }
@@ -312,16 +466,19 @@ void Cleanup() {
         g_hChildProcess = NULL;
     }
 
-    if (g_pWaitThread) {
-        if (g_pWaitThread->joinable()) {
-            g_pWaitThread->join();
-        }
-        delete g_pWaitThread;
-        g_pWaitThread = nullptr;
+    if (g_hWaitThread) {
+        WaitForSingleObject(g_hWaitThread, 500);
+        CloseHandle(g_hWaitThread);
+        g_hWaitThread = NULL;
     }
 
     if (g_hConsole) {
         FreeConsole();
         g_hConsole = NULL;
+    }
+
+    if (g_hSingleMutex) {
+        CloseHandle(g_hSingleMutex);
+        g_hSingleMutex = NULL;
     }
 }
