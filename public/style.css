@@ -78,10 +78,12 @@ body {
    SCREEN 1: LOBBY
 ============================================================ */
 #lobby-screen {
+  flex-direction: column;
   justify-content: center;
   align-items: center;
   padding: 16px;
   background: var(--bg-canvas);
+  position: relative;
 }
 
 .lobby-panel {
@@ -262,6 +264,72 @@ body {
 .primary-btn:focus-visible {
   outline: 2px solid var(--border-active);
   outline-offset: 2px;
+}
+
+/* Lobby Bottom Actions (View on GitHub & Download Tool) */
+.lobby-bottom-bar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  margin-top: 18px;
+  width: 100%;
+  max-width: 360px;
+}
+
+@media (min-height: 640px) {
+  .lobby-bottom-bar {
+    position: absolute;
+    bottom: 24px;
+    left: 50%;
+    transform: translateX(-50%);
+    margin-top: 0;
+  }
+}
+
+.lobby-bottom-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 7px 12px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-line);
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  font-size: 0.76rem;
+  font-weight: 600;
+  text-decoration: none;
+  transition: all 0.15s ease;
+  white-space: nowrap;
+}
+
+.lobby-bottom-btn:hover {
+  color: var(--text-bright);
+  border-color: var(--border-active);
+  background: var(--bg-surface-elevated);
+  transform: translateY(-1px);
+}
+
+.lobby-bottom-btn svg {
+  flex-shrink: 0;
+}
+
+.badge-win {
+  font-size: 0.62rem;
+  font-weight: 700;
+  padding: 1px 4px;
+  border-radius: 3px;
+  background: rgba(59, 130, 246, 0.12);
+  color: #60a5fa;
+  border: 1px solid rgba(59, 130, 246, 0.25);
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+
+.lobby-bottom-btn.btn-download:hover .badge-win {
+  background: rgba(59, 130, 246, 0.22);
+  border-color: #3b82f6;
 }
 
 .lobby-meta {
