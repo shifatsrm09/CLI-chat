@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, interactive-widget=resizes-content, viewport-fit=cover">
+  <title>api.cfat.site</title>
+  <link rel="icon" type="image/png" href="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAFZklEQVR4nL1XXWhURxQ+Z+5P9vqTEH2wod1sjGs0QnwoLYH64ENRKVZfiiAUtPEhCEbxJSlofRCL0KL4ICUUfPGhT1IfSltSWihLpRba2kDzt3TJkhVJaGwSaVxzd+/MlDOZ2Y7bu5tE2x64e+/emXO+c75zzsxcgOcTR1//q2ANUEePrdnYauaYi4SbgXQ6/Rbdc7ncpzGOCACQ+qprvF4k0gYk6erqai4Wi4c4571Syj30DhG/B4CP161b9/nY2NjcWuwhrCCICB0dHW1hGHYj4huc8wOI+IKUEqSUgu6MMUbzhBAzrut+7TjOVw0NDT+MjIxMIuLqGThy5IgzPDx8oFwuJxljSc75dgDYJYRIM8YSNEcIQcAcCRGAaVVDt8PY8ispZQkRcwAwhohZxth93/cfbNmyZSiTyUTVDjAysnPnzpfDMPyZQIzoSEFTp0DqMGcoVoVKPi77qUEYA9/3X81msz8ZTNd2JIqiF4UQgnNeRkRT6axO5ccxamxKLSoaYk1K6ZVKpRYb07X/CCE2akDHGluzOI5DgCiEqKRJs0G1stHGZLZiGIaVyc8ipEc0LywswOPHj2PtGAwjrMqA/0zIGpxqpVgswuHDh6G7uxuePHnyDyeklG5NBxzHWXqeyB89egQXLlyAmzdvwu3bt2nNUE6YziDxPK9U0wHP88r18kpXrbGHDx/C+fPn4fTp01Aul6naIZFImA5SfsYFyfR9uc84n9EKTzlGMjc3B/Pz8yoam1bXdWF2dhbOnj0LAwMDUCqVKBC4ePEi3L17FzZs2KDWDsuBWRuT2X+CIJjWfUzvK65zzqG3txeOHz8Oi4uLFdoN+IkTJ+DSpUsKnCK/du0aXLlyBRobG5WutsWoFV3XnbExjSjv9u7dm2htbb2fTCZlMpnkbW1tsqmpSZ45c8b0tLx+/bpsbGyU7e3t6t7T0yOFELJUKqnxGzduKJ1UKiVbW1ulsUXPZDuVSiXi2lDScyaTWWKMZTXFyxQxplqKJAxD6Ovrg8uXL8PU1BTs378fBgcHVZRE+61bt6C/vx+amprsFbRiCwDGp6amlmyG3QoHemkEgAwivk5RkWGikSq6o6ND5ZgK7NSpU9Dc3Az79u1TwOTk0NCQek85V4h/g6u/eiH6rgoL7CalEuc7dux4ZWlp6UdywIyTMhUgtRhFSE4QMIHQ2J07d+Do0aPKCNWFvZcYB2jDTCQSZh9QWHYKwGwiu3fv/gURf9VpqOzdmzdvVoV29epVBR5FkQK/d+8eHDt2TIHWAKedk+4jZFsHVbGLVZMpJVEqlToJAINCiMikyexsxITp99HRUQVOLRoEgan4p0OXMnJd10XEvnw+/5HBqOUA0k9LS0vged4EALxElW1vKCS03G7dulW1IK10tODERE4i9LnhQRAEu7LZ7GJ1C7Jqh+nd9PR00ff9c5Q3s53qaNS1fv16KBQKKg11wNWJiRxgjJ3LZrN/Vq8vcQwYUUWSSqU+A4BDdioqipqNqmq3JWKMuVLKLwuFwkG78GxhNZQVE0EQ9CBiHhHdauWqPo8rPMp7ftOmTe/ERb6SA4J+JiYm/vA876CUclqfkCrFU0cimiul/N113TeHh4fN2h+bJ1zBmKItnU7viqLoCyllG+dcAcToqvMg0Q4ABcdxDk5OTo7Uon4lBoyQopPL5cY453sQ8RtqKQ0eWR8e9EzFRrR/6/v+a6sBJ1nt2UsZonPetm3b+qMoeo/Odqb69YFjERHfz+fzH+pvgRXB1+KAwjERd3Z2bg/D8N0oit6mAdd1P2loaPhgfHz8N+szLr43/wVxzENXV1c7XXFj/7WYo7sNvFI9xcpf4h+Ofb5lMJgAAAAASUVORK5CYII=">
+  <link rel="icon" type="image/png" sizes="32x32" href="favicon-32x32.png?v=5">
+  <link rel="icon" type="image/x-icon" href="favicon.ico?v=5">
+  <link rel="shortcut icon" href="favicon.ico?v=5">
+  <link rel="apple-touch-icon" href="icon.png?v=5">
+  <link rel="stylesheet" href="style.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Urbanist:wght@500;600;700&family=Plus+Jakarta+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+</head>
+<body>
+  <!-- Toast Notification Container -->
+  <div id="toast-container" class="toast-container" aria-live="polite"></div>
+
+  <!-- SCREEN 1: LOBBY -->
+  <main id="lobby-screen" class="screen active">
+    <div class="lobby-panel">
+      <header class="brand">
+        <div class="brand-mark">
+          <img src="icon.png?v=5" alt="CFAT Logo" width="22" height="22">
+        </div>
+        <div class="brand-text">
+          <h1>api.cfat.site</h1>
+        </div>
+      </header>
+
+      <nav class="segmented-control" aria-label="Room access mode">
+        <button id="tab-join" class="tab-btn active" type="button" onclick="switchTab('join')">Join Room</button>
+        <button id="tab-host" class="tab-btn" type="button" onclick="switchTab('host')">Host Room</button>
+      </nav>
+
+      <!-- JOIN ROOM FORM -->
+      <form id="join-form" class="auth-form" onsubmit="handleJoin(event)">
+        <div class="field">
+          <label for="join-room">Room Code</label>
+          <input type="text" id="join-room" placeholder="4821" required autocomplete="off" spellcheck="false" maxlength="24">
+        </div>
+        <div class="field">
+          <label for="join-user">Your Name</label>
+          <input type="text" id="join-user" placeholder="Enter handle" required autocomplete="name" maxlength="24">
+        </div>
+        <button type="submit" class="primary-btn">
+          <span>Enter Room</span>
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+        </button>
+      </form>
+
+      <!-- HOST ROOM FORM -->
+      <form id="host-form" class="auth-form hidden" onsubmit="handleHost(event)">
+        <div class="field">
+          <label for="host-room">Room Code</label>
+          <div class="field-composite">
+            <input type="text" id="host-room" placeholder="4821" required autocomplete="off" spellcheck="false" maxlength="24">
+            <button type="button" class="btn-addon" onclick="generateNewRoomCode()" title="Generate new code" aria-label="Generate new code">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"/></svg>
+            </button>
+          </div>
+        </div>
+        <div class="field">
+          <label for="host-user">Your Name</label>
+          <input type="text" id="host-user" placeholder="Enter handle" required autocomplete="name" maxlength="24">
+        </div>
+        <button type="submit" class="primary-btn">
+          <span>Create & Connect</span>
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+        </button>
+      </form>
+
+      <footer class="lobby-meta">
+        <span>Persistent room memory · Cloudflare Durable Objects</span>
+      </footer>
+    </div>
+
+    <!-- BOTTOM ACTIONS (Download GLU & View on GitHub - CLI-chat badge style) -->
+    <nav class="lobby-bottom-bar" aria-label="Desktop application and source code">
+      <a href="https://github.com/shifatsrm09/CLI-chat/releases/latest/download/glu.exe" class="badge-pill-btn btn-glu" title="Download Standalone Windows Desktop GLU (glu.exe)" target="_blank" rel="noopener noreferrer">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M7 10l5 5 5-5"></path>
+          <line x1="12" y1="3" x2="12" y2="15"></line>
+          <line x1="4" y1="20" x2="20" y2="20"></line>
+        </svg>
+        <span>DOWNLOAD GLU</span>
+      </a>
+
+      <a href="https://github.com/shifatsrm09/CLI-chat" class="badge-pill-btn btn-gh" title="View Source on GitHub" target="_blank" rel="noopener noreferrer">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor">
+          <path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/>
+        </svg>
+        <span>VIEW ON GITHUB</span>
+      </a>
+    </nav>
+  </main>
+
+  <!-- SCREEN 2: ACTIVE CHAT -->
+  <main id="chat-screen" class="screen">
+    <!-- Top Action Bar -->
+    <header class="chat-header">
+      <div class="header-cluster left">
+        <button class="nav-btn" onclick="leaveRoom()" title="Leave room" aria-label="Leave room">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>
+        </button>
+        <div class="room-descriptor">
+          <div class="room-identifier">
+            <img src="icon.png?v=5" alt="Icon" class="room-title-icon" width="18" height="18">
+            <span class="muted-prefix">Room</span>
+            <span id="active-room-code" class="room-code-badge">XXXX</span>
+            <button class="btn-text-action" onclick="copyInviteLink()" title="Copy invite link">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+              <span>Share</span>
+            </button>
+          </div>
+          <div class="telemetry-row">
+            <span id="status-dot" class="status-indicator live"></span>
+            <span id="status-text">Connected</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="header-cluster right">
+        <button class="nav-btn" id="sound-btn" onclick="toggleSound()" title="Toggle notification audio" aria-label="Toggle notification audio">
+          <svg id="sound-icon-on" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"></path></svg>
+          <svg id="sound-icon-off" class="hidden" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon><line x1="23" y1="9" x2="17" y2="15"></line><line x1="17" y1="9" x2="23" y2="15"></line></svg>
+        </button>
+
+        <button class="nav-btn count-pill" onclick="toggleParticipantsDrawer()" title="View active members" aria-label="View active members">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M23 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path></svg>
+          <span id="participant-count-badge">1</span>
+        </button>
+      </div>
+    </header>
+
+    <!-- Message Stream -->
+    <div id="messages-stream" class="messages-stream">
+      <!-- Injected messages -->
+    </div>
+
+    <!-- Drag & Drop Overlay -->
+    <div id="drop-overlay" class="drop-overlay hidden">
+      <div class="drop-zone">
+        <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
+        <span>Drop file to send to room</span>
+      </div>
+    </div>
+
+    <!-- Message Composer -->
+    <footer class="chat-footer">
+      <form class="composer-form" onsubmit="handleSendMessage(event)">
+        <button type="button" id="attach-button" class="btn-attach" onclick="triggerFileInput()" title="Attach file" aria-label="Attach file">
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"></path></svg>
+        </button>
+        <input type="file" id="file-input" class="hidden" onchange="handleFileSelected(event)">
+        <input 
+          type="text" 
+          id="chat-input" 
+          placeholder="Message room or /w user msg..." 
+          autocomplete="off" 
+          maxlength="2000"
+          onkeydown="handleInputKeydown(event)"
+        />
+        <button type="submit" id="send-button" class="btn-send" title="Send (Enter)">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>
+        </button>
+      </form>
+    </footer>
+
+    <!-- Participants Drawer -->
+    <div id="drawer-backdrop" class="drawer-backdrop hidden" onclick="toggleParticipantsDrawer()"></div>
+    <aside id="participants-drawer" class="participants-drawer hidden" aria-label="Participants">
+      <div class="drawer-header">
+        <h2>Active Members (<span id="drawer-user-count">0</span>)</h2>
+        <button class="nav-btn compact" onclick="toggleParticipantsDrawer()" title="Close" aria-label="Close">✕</button>
+      </div>
+      <ul id="participants-list" class="member-list">
+        <!-- Injected list -->
+      </ul>
+    </aside>
+  </main>
+
+  <!-- FILE EDITOR MODAL -->
+  <div id="file-editor-modal" class="modal-overlay hidden" aria-hidden="true" role="dialog" aria-labelledby="editor-title" onclick="handleModalBackdropClick(event)">
+    <div class="modal-card file-editor-card" onclick="event.stopPropagation()">
+      <div class="modal-header">
+        <div class="modal-title-group">
+          <div class="modal-icon">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>
+              <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>
+            </svg>
+          </div>
+          <div>
+            <h2 id="editor-title" class="modal-title">Edit & Resend File</h2>
+            <p class="modal-subtitle">Modify text content and broadcast back to room</p>
+          </div>
+        </div>
+        <button type="button" class="nav-btn compact" onclick="closeFileEditor()" title="Close editor" aria-label="Close editor">✕</button>
+      </div>
+
+      <div class="modal-body file-editor-body">
+        <div class="editor-filename-row">
+          <label for="editor-filename">File Name</label>
+          <input type="text" id="editor-filename" spellcheck="false" autocomplete="off" placeholder="demo.txt">
+        </div>
+        
+        <div class="editor-textarea-wrap">
+          <textarea id="file-editor-textarea" spellcheck="false" placeholder="File content..." oninput="updateEditorStats()" onkeydown="handleEditorKeydown(event)"></textarea>
+        </div>
+
+        <div class="editor-stats-bar">
+          <span id="editor-stats-info">Lines: 0 · Chars: 0 · 0 B</span>
+          <span class="editor-hint">Ctrl+Enter to send · Esc to close</span>
+        </div>
+      </div>
+
+      <div class="modal-footer">
+        <button type="button" class="btn-modal secondary" onclick="closeFileEditor()">Cancel</button>
+        <div class="modal-footer-actions">
+          <button type="button" class="btn-modal action-download" onclick="downloadEditedFile()" title="Download local copy">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+            <span>Save Copy</span>
+          </button>
+          <button type="button" class="btn-modal primary" onclick="saveAndResendFile()">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>
+            <span>Send to Room</span>
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
