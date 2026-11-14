@@ -622,10 +622,21 @@ function handlePeerFileRequestChunks(packet) {
 
   const payload = transfer.payload;
   const totalChunks = transfer.totalChunks;
+  const missingList = packet.missing.filter((idx) => Number.isInteger(idx) && idx >= 0 && idx < totalChunks);
+  let mIdx = 0;
 
-  // Re-transmit requested missing chunks directly to this peer
-  for (const idx of packet.missing) {
-    if (!Number.isInteger(idx) || idx < 0 || idx >= totalChunks) continue;
+  function sendNextRetryChunk() {
+    if (!state.ws || state.ws.readyState !== WebSocket.OPEN || mIdx >= missingList.length) {
+      state.ws?.send(JSON.stringify({
+        type: "action",
+        action: "file_done",
+        to: peer,
+        id: transfer.id,
+        totalChunks,
+      }));
+      return;
+    }
+    const idx = missingList[mIdx++];
     const start = idx * WEB_FILE_SLICE;
     const slice = payload.subarray(start, start + WEB_FILE_SLICE);
     const b64 = uint8ToBase64(slice);
@@ -638,20 +649,47 @@ function handlePeerFileRequestChunks(packet) {
       i: idx,
       index: idx,
       n: totalChunks,
-      totalChunks: totalChunks,
+      totalChunks,
       d: b64,
-      data: b64,
     }));
+    setTimeout(sendNextRetryChunk, 15);
   }
+  sendNextRetryChunk();
+}
 
-  // Targeted done to signal end of retry batch
-  state.ws.send(JSON.stringify({
-    type: "action",
-    action: "file_done",
-    to: peer,
-    id: transfer.id,
-    totalChunks,
-  }));
+// Unthrottled timer helper for background tab chunk streaming
+let bgTimerWorker = null;
+try {
+  const blob = new Blob([`
+    let t = null;
+    self.onmessage = function(e) {
+      if (e.data.action === 'start') {
+        if (t) clearTimeout(t);
+        t = setTimeout(() => self.postMessage('tick'), e.data.ms || 25);
+      } else if (e.data.action === 'stop') {
+        if (t) clearTimeout(t);
+        t = null;
+      }
+    };
+  `], { type: "application/javascript" });
+  bgTimerWorker = new Worker(URL.createObjectURL(blob));
+} catch (_) {}
+
+function scheduleChunkTick(fn, ms) {
+  if (bgTimerWorker) {
+    const handler = (e) => {
+      if (e.data === 'tick') {
+        bgTimerWorker.removeEventListener('message', handler);
+        fn();
+      }
+    };
+    bgTimerWorker.addEventListener('message', handler);
+    bgTimerWorker.postMessage({ action: 'start', ms });
+    return { stop: () => bgTimerWorker.postMessage({ action: 'stop' }) };
+  } else {
+    const t = setTimeout(fn, ms);
+    return { stop: () => clearTimeout(t) };
+  }
 }
 
 function transmitOutgoingFile(transfer) {
@@ -722,7 +760,7 @@ function transmitOutgoingFile(transfer) {
     const approxBytes = Math.min(transfer.size, Math.round((chunkIndex / totalChunks) * transfer.size));
     updateFileCardStatus(transfer.cardEl, `Sending (${humanSize(approxBytes)} / ${humanSize(transfer.size)})...`, pct);
 
-    transfer.timer = setTimeout(sendNextChunk, WEB_CHUNK_PACE_MS);
+    transfer.timer = scheduleChunkTick(sendNextChunk, WEB_CHUNK_PACE_MS);
   }
 
   sendNextChunk();
@@ -773,6 +811,16 @@ function handleIncomingFileOffer(packet) {
 
   updateFileCardReceiving(transfer.cardEl, `Receiving from ${sender}...`);
 
+  // Auto-send accept confirmation back to sender
+  if (state.ws && state.ws.readyState === WebSocket.OPEN) {
+    state.ws.send(JSON.stringify({
+      type: "action",
+      action: "file_accept",
+      to: sender,
+      id: transfer.id,
+    }));
+  }
+
   if (size === 0 && totalChunks === 0) {
     finalizeIncomingFile(transfer);
     return;
@@ -780,6 +828,35 @@ function handleIncomingFileOffer(packet) {
 
   resetIncomingWatchdog(transfer);
 }
+
+window.acceptIncomingFile = function(id) {
+  const t = state.incomingTransfers[id];
+  if (!t) return;
+  updateFileCardReceiving(t.cardEl, `Receiving from ${t.from}...`);
+  if (state.ws && state.ws.readyState === WebSocket.OPEN) {
+    state.ws.send(JSON.stringify({
+      type: "action",
+      action: "file_accept",
+      to: t.from,
+      id: t.id,
+    }));
+  }
+};
+
+window.rejectIncomingFile = function(id) {
+  const t = state.incomingTransfers[id];
+  if (!t) return;
+  updateFileCardDone(t.cardEl, "Transfer declined");
+  if (state.ws && state.ws.readyState === WebSocket.OPEN) {
+    state.ws.send(JSON.stringify({
+      type: "action",
+      action: "file_reject",
+      to: t.from,
+      id: t.id,
+    }));
+  }
+  delete state.incomingTransfers[id];
+};
 
 function handleIncomingFileChunk(packet) {
   const t = state.incomingTransfers[packet.id];
