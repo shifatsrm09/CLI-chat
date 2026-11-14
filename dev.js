@@ -108,11 +108,12 @@ const incomingTransfers       = new Map();
 let incomingFile              = null; // active incoming transfer for progress bar
 
 /** Target file auto-send watcher */
-let targetFilePath      = null;
-let targetWatcher       = null;
-let targetDebounceTimer = null;
-let targetLastMtime     = 0;
-let targetIgnoreUntil   = 0;
+let targetFilePath           = null;
+let targetWatcher            = null;
+let targetDebounceTimer      = null;
+let targetLastMtime          = 0;
+let targetLastFileHash       = "";
+let targetPendingUpdateTimer = null;
 
 /* ─── Boot Flow ─────────────────────────────────────────────────── */
 
@@ -488,7 +489,6 @@ function handleWebActionPayload(msg) {
             const targetResolved = targetFilePath ? path.resolve(targetFilePath) : null;
             const offerResolved = path.resolve(process.cwd(), safeFilename(filename));
             if (targetResolved && targetResolved === offerResolved) {
-                targetIgnoreUntil = Date.now() + 10000;
                 if (targetDebounceTimer) {
                     clearTimeout(targetDebounceTimer);
                     targetDebounceTimer = null;
@@ -551,8 +551,20 @@ function handleWebActionPayload(msg) {
 
             const payload = transfer.payloadBuffer;
             const totalChunks = transfer.totalChunks;
-            for (const idx of msg.missing) {
-                if (!Number.isInteger(idx) || idx < 0 || idx >= totalChunks) continue;
+            const missingList = msg.missing.filter((idx) => Number.isInteger(idx) && idx >= 0 && idx < totalChunks);
+            let mIdx = 0;
+
+            function sendNextRetryChunk() {
+                if (!connected || mIdx >= missingList.length) {
+                    sendWebAction({
+                        action: "file_done",
+                        to: sender,
+                        id: transfer.id,
+                        totalChunks,
+                    });
+                    return;
+                }
+                const idx = missingList[mIdx++];
                 const start = idx * WEB_FILE_SLICE;
                 const slice = payload.subarray(start, start + WEB_FILE_SLICE);
                 sendWebAction({
@@ -564,15 +576,10 @@ function handleWebActionPayload(msg) {
                     n: totalChunks,
                     totalChunks,
                     d: slice.toString("base64"),
-                    data: slice.toString("base64"),
                 });
+                setTimeout(sendNextRetryChunk, 15);
             }
-            sendWebAction({
-                action: "file_done",
-                to: sender,
-                id: transfer.id,
-                totalChunks,
-            });
+            sendNextRetryChunk();
             break;
         }
 
@@ -898,18 +905,9 @@ function setTargetFile(filepath) {
 function handleTargetFileUpdate() {
     if (!targetFilePath || !connected) return;
 
-    // Cooldown after incoming file reception to prevent auto-sync echo loop
-    if (Date.now() < targetIgnoreUntil) {
-        try {
-            if (fs.existsSync(targetFilePath)) {
-                targetLastMtime = fs.statSync(targetFilePath).mtimeMs;
-            }
-        } catch (_) {}
-        return;
-    }
-
     if (!fs.existsSync(targetFilePath)) {
-        setTimeout(() => {
+        if (targetPendingUpdateTimer) clearTimeout(targetPendingUpdateTimer);
+        targetPendingUpdateTimer = setTimeout(() => {
             if (fs.existsSync(targetFilePath)) {
                 handleTargetFileUpdate();
             }
@@ -918,16 +916,39 @@ function handleTargetFileUpdate() {
     }
 
     if (outgoingFile) {
-        setTimeout(handleTargetFileUpdate, 400);
+        if (targetPendingUpdateTimer) clearTimeout(targetPendingUpdateTimer);
+        targetPendingUpdateTimer = setTimeout(handleTargetFileUpdate, 300);
         return;
     }
 
     try {
-        const stat = fs.statSync(targetFilePath);
+        let stat = fs.statSync(targetFilePath);
         if (!stat.isFile()) return;
 
+        // If editor temporarily truncated file to 0 bytes during atomic save, wait 60ms
+        if (stat.size === 0) {
+            setTimeout(() => {
+                try {
+                    const reStat = fs.statSync(targetFilePath);
+                    if (reStat.size > 0 || stat.mtimeMs > targetLastMtime) {
+                        handleTargetFileUpdate();
+                    }
+                } catch (_) {}
+            }, 60);
+            return;
+        }
+
         if (stat.mtimeMs <= targetLastMtime) return;
+
+        const raw = fs.readFileSync(targetFilePath);
+        const currentHash = crypto.createHash("sha256").update(raw).digest("hex");
+        if (currentHash === targetLastFileHash) {
+            targetLastMtime = stat.mtimeMs;
+            return; // Exact same content, suppress echo
+        }
+
         targetLastMtime = stat.mtimeMs;
+        targetLastFileHash = currentHash;
 
         // Re-attach watcher in case editor used atomic rename/replacement
         if (targetWatcher) {
@@ -940,7 +961,7 @@ function handleTargetFileUpdate() {
                     if (targetDebounceTimer) clearTimeout(targetDebounceTimer);
                     targetDebounceTimer = setTimeout(() => {
                         handleTargetFileUpdate();
-                    }, 250);
+                    }, 200);
                 }
             });
         } catch (_) {}
@@ -1055,6 +1076,11 @@ function transmitWebFile(transfer) {
             print(`${c.green}✓ File sent: ${transfer.filename}${c.reset}`);
             scheduleOutgoingPruning(transfer.id);
             if (outgoingFile === transfer) outgoingFile = null;
+            if (targetPendingUpdateTimer) {
+                clearTimeout(targetPendingUpdateTimer);
+                targetPendingUpdateTimer = null;
+                setTimeout(handleTargetFileUpdate, 50);
+            }
             return;
         }
 
@@ -1155,13 +1181,13 @@ function finalizeIncomingTransfer(transfer) {
         const savePath = safeFilename(transfer.filename);
         const resolvedSavePath = path.resolve(process.cwd(), savePath);
 
-        // If incoming file is our target file, suppress watcher trigger for 3 seconds
+        // If incoming file is our target file, record its hash to suppress watcher echo
         if (targetFilePath && path.resolve(targetFilePath) === resolvedSavePath) {
+            targetLastFileHash = crypto.createHash("sha256").update(fileBuffer).digest("hex");
             if (targetDebounceTimer) {
                 clearTimeout(targetDebounceTimer);
                 targetDebounceTimer = null;
             }
-            targetIgnoreUntil = Date.now() + 3000;
         }
 
         fs.writeFileSync(savePath, fileBuffer);

@@ -759,8 +759,20 @@ function handleWebActionPayload(msg) {
 
             const payload = transfer.payloadBuffer;
             const totalChunks = transfer.totalChunks;
-            for (const idx of msg.missing) {
-                if (!Number.isInteger(idx) || idx < 0 || idx >= totalChunks) continue;
+            const missingList = msg.missing.filter((idx) => Number.isInteger(idx) && idx >= 0 && idx < totalChunks);
+            let mIdx = 0;
+
+            function sendNextRetryChunk() {
+                if (!connected || mIdx >= missingList.length) {
+                    sendWebAction({
+                        action: "file_done",
+                        to: sender,
+                        id: transfer.id,
+                        totalChunks,
+                    });
+                    return;
+                }
+                const idx = missingList[mIdx++];
                 const start = idx * WEB_FILE_SLICE;
                 const slice = payload.subarray(start, start + WEB_FILE_SLICE);
                 sendWebAction({
@@ -772,15 +784,10 @@ function handleWebActionPayload(msg) {
                     n: totalChunks,
                     totalChunks,
                     d: slice.toString("base64"),
-                    data: slice.toString("base64"),
                 });
+                setTimeout(sendNextRetryChunk, 15);
             }
-            sendWebAction({
-                action: "file_done",
-                to: sender,
-                id: transfer.id,
-                totalChunks,
-            });
+            sendNextRetryChunk();
             break;
         }
 
