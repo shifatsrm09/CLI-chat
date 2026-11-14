@@ -7,7 +7,7 @@
     "start": "node client.js",
     "client": "node client.js",
     "dev": "node dev.js",
-    "gui": "node -e \"const fs=require('fs');const p=fs.existsSync('build/gui.exe')?'build\\\\\\\\gui.exe':'gui.exe';require('child_process').spawn(p,[],{detached:true,stdio:'ignore'}).unref()\"",
+    "glu": "node -e \"const fs=require('fs');const p=fs.existsSync('build/glu.exe')?'build\\\\\\\\glu.exe':'glu.exe';require('child_process').spawn(p,[],{detached:true,stdio:'ignore'}).unref()\"",
     "prebuild": "node -e \"const fs=require('fs');if(!fs.existsSync('build'))fs.mkdirSync('build');\"",
     "build:dev:win": "pkg dev.js --targets node18-win-x64 --output build/dev.exe",
     "build:dev:linux": "pkg dev.js --targets node18-linux-x64 --output build/dev-linux",
@@ -15,10 +15,10 @@
     "build:client:win": "pkg client.js --targets node18-win-x64 --output build/client-win.exe",
     "build:client:linux": "pkg client.js --targets node18-linux-x64 --output build/client",
     "build:client": "npm run prebuild && npm run build:client:win && npm run build:client:linux",
-    "build:gui": "node -e \"const fs=require('fs');const cp=require('child_process');if(!fs.existsSync('build'))fs.mkdirSync('build');if(!fs.existsSync('build/dev.exe')){console.log('Building dev.exe prerequisite...');cp.execSync('npm run build:dev:win',{stdio:'inherit'});}if(process.platform==='win32'){cp.execSync('windres gui.rc -O coff -o build/gui_res.o && g++ -O2 -mwindows -static -static-libgcc -static-libstdc++ gui.cpp build/gui_res.o -o build/gui.exe -lcomctl32 -lshell32 -lole32 -lcomdlg32',{stdio:'inherit'})}else{console.log('Skipping gui build on non-Windows')}\"",
-    "build:win": "npm run build:client:win && npm run build:dev:win && npm run build:gui",
+    "build:glu": "node -e \"const fs=require('fs');const cp=require('child_process');if(!fs.existsSync('build'))fs.mkdirSync('build');if(!fs.existsSync('build/dev.exe')){console.log('Building dev.exe prerequisite...');cp.execSync('npm run build:dev:win',{stdio:'inherit'});}if(process.platform==='win32'){cp.execSync('windres glu.rc -O coff -o build/glu_res.o && g++ -O2 -mwindows -static -static-libgcc -static-libstdc++ glu.cpp build/glu_res.o -o build/glu.exe -lcomctl32 -lshell32 -lole32 -lcomdlg32',{stdio:'inherit'})}else{console.log('Skipping glu build on non-Windows')}\"",
+    "build:win": "npm run build:client:win && npm run build:dev:win && npm run build:glu",
     "build:linux": "npm run build:client:linux && npm run build:dev:linux",
-    "build": "npm run prebuild && npm run build:dev && npm run build:client && npm run build:gui"
+    "build": "npm run prebuild && npm run build:dev && npm run build:client && npm run build:glu"
   },
   "keywords": [
     "cli",

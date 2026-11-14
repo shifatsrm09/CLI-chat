@@ -9,5 +9,6 @@ gui_config.ini
 test.txt
 demo.txt
 gui.exe
+glu.exe
 build
 build/

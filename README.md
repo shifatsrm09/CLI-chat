@@ -18,8 +18,8 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/shifatsrm09/CLI-chat/releases/latest/download/gui.exe" aria-label="Download CLI Chat GUI for Windows">
-    <img src="resources/download-button.svg" alt="Download GUI.exe" width="310" height="49">
+  <a href="https://github.com/shifatsrm09/CLI-chat/releases/latest/download/glu.exe" aria-label="Download CLI Chat GLU for Windows">
+    <img src="resources/download-button.svg" alt="Download glu.exe" width="310" height="49">
   </a>
 </p>
 
@@ -27,7 +27,7 @@
   <a href="https://github.com/shifatsrm09/CLI-chat/releases/latest">All Releases &amp; Binaries</a>
   · <a href="#features">Features</a>
   · <a href="#quick-start">Quick Start</a>
-  · <a href="#gui--tray-mode">GUI &amp; Tray</a>
+  · <a href="#glu--tray-mode">GLU &amp; Tray</a>
   · <a href="#commands">Commands</a>
 </p>
 
@@ -38,7 +38,7 @@
 - **Cross-Platform Interop:** Chat between command-line terminals and web browsers on [chat.cfat.site](https://chat.cfat.site) with zero configuration.
 - **High-Speed File Sharing (`/send`):** 16 KB chunked streaming, Deflate compression, and automatic packet drop recovery (`file_request_chunks`). Broadcasts to all room participants simultaneously.
 - **Target File Auto-Sync (`/target`):** Watches a local file for changes and auto-transmits the update to the room whenever you save in your editor.
-- **Close-to-Tray Native Host (`gui.exe`):** Native Windows C++ host that intercepts the window close button (`X` or Alt+F4) and minimizes to the System Tray, keeping transfers active in the background.
+- **Close-to-Tray Native Host (`glu.exe`):** Native Windows C++ host that intercepts the window close button (`X` or Alt+F4) and minimizes to the System Tray, keeping transfers active in the background.
 - **Private Whispers (`/w`):** Direct 1-to-1 targeted messaging within any room.
 - **Dual Backend Support:** Connect via Cloudflare Edge Worker (`api.cfat.site`) or Syncplay TLS server (`syncplay.pl:8995`).
 - **Stealth Mode (`-s`):** Strips ANSI formatting for minimal or low-profile terminal use.
@@ -52,8 +52,8 @@
 Grab the latest standalone binary from [GitHub Releases](https://github.com/shifatsrm09/CLI-chat/releases/latest):
 
 ```powershell
-# Windows Mini GUI with System Tray support
-.\gui.exe
+# Windows Mini GLU with System Tray support
+.\glu.exe
 
 # Windows standalone terminal client
 .\client-win.exe
@@ -87,13 +87,13 @@ node client.js --server web_server --user alice --room 6767
 
 ---
 
-## GUI & Tray Mode
+## GLU & Tray Mode
 
-`gui.exe` provides a native Win32 host wrapper for the terminal:
+`glu.exe` provides a native Win32 host wrapper for the terminal:
 
 - **Close to Tray:** Clicking the **X** button hides the console window into the Windows System Tray while keeping WebSocket connections and file transfers alive.
 - **Restore:** Double-click the tray icon to restore the terminal window instantly.
-- **Tray Menu:** Right-click the tray icon for **Open Terminal**, **Hide to Tray**, and **Exit cli-chat**.
+- **Tray Menu:** Right-click the tray icon for **Show Terminal**, **Hide to Tray**, and **Exit glu**.
 
 ---
 
@@ -118,7 +118,7 @@ node client.js --server web_server --user alice --room 6767
 
 | Platform | Executable | Status |
 |:---|:---|:---|
-| Windows x64 (GUI + Tray) | `gui.exe` | ✅ Available |
+| Windows x64 (GLU + Tray) | `glu.exe` | ✅ Available |
 | Windows x64 (CLI) | `client-win.exe`, `dev.exe` | ✅ Available |
 | Linux x64 (CLI) | `client`, `dev-linux` | ✅ Available |
 | Web Browser | [chat.cfat.site](https://chat.cfat.site) | ✅ Live |
