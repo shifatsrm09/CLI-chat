@@ -924,9 +924,6 @@ async function finalizeIncomingFile(t) {
   updateFileCardReady(t.cardEl, t.filename, humanSize(finalBytes.length), blobUrl, t.id, isText);
   playChime("msg");
   showToast(`File ready: ${t.filename}`);
-
-  // Automatically trigger download
-  triggerDownload(blobUrl, t.filename);
 }
 
 function cleanupUserFileTransfers(peerName) {
