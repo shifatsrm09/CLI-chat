@@ -123,6 +123,24 @@
       </div>
 
       <div class="header-cluster right">
+        <!-- Remote Capture Trigger (visible when a capture device is online) -->
+        <button class="nav-btn capture-trigger-btn hidden" id="capture-trigger-btn" onclick="triggerRemoteCapture()" title="Take photo from remote capture device" aria-label="Take photo from remote capture device">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"></path>
+            <circle cx="12" cy="13" r="4"></circle>
+          </svg>
+          <span class="btn-text">Capture</span>
+        </button>
+
+        <!-- Make this a capture device toggle -->
+        <button class="nav-btn capture-mode-btn" id="make-capture-btn" onclick="toggleCaptureDeviceMode()" title="Make this a capture device" aria-label="Make this a capture device">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <polygon points="23 7 16 12 23 17 23 7"></polygon>
+            <rect x="1" y="5" width="15" height="14" rx="2" ry="2"></rect>
+          </svg>
+          <span class="btn-text">Camera</span>
+        </button>
+
         <button class="nav-btn" id="sound-btn" onclick="toggleSound()" title="Toggle notification audio" aria-label="Toggle notification audio">
           <svg id="sound-icon-on" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"></path></svg>
           <svg id="sound-icon-off" class="hidden" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon><line x1="23" y1="9" x2="17" y2="15"></line><line x1="17" y1="9" x2="23" y2="15"></line></svg>
@@ -229,6 +247,54 @@
             <span>Send to Room</span>
           </button>
         </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- FLOATING CAMERA VIEWFINDER (For Capture Device) -->
+  <div id="capture-viewfinder" class="capture-viewfinder hidden" role="region" aria-label="Camera Viewfinder">
+    <div class="viewfinder-header" id="viewfinder-drag-handle">
+      <div class="viewfinder-title">
+        <span class="live-indicator"></span>
+        <span id="viewfinder-status-text">Camera Armed</span>
+      </div>
+      <div class="viewfinder-controls">
+        <button type="button" class="viewfinder-btn" onclick="toggleViewfinderMinimize()" title="Minimize / Expand Viewfinder" aria-label="Minimize / Expand">
+          <svg id="vf-min-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+        </button>
+        <button type="button" class="viewfinder-btn close" onclick="stopCaptureDevice()" title="Turn Off Camera" aria-label="Turn Off Camera">✕</button>
+      </div>
+    </div>
+
+    <div class="viewfinder-body" id="viewfinder-body">
+      <video id="viewfinder-video" autoplay playsinline muted></video>
+      <div id="viewfinder-flash" class="viewfinder-flash hidden"></div>
+      <div class="viewfinder-overlay-controls">
+        <div class="camera-select-wrap">
+          <select id="viewfinder-camera-select" onchange="switchCameraDevice(this.value)" aria-label="Select camera lens">
+            <option value="">Detecting cameras...</option>
+          </select>
+        </div>
+        <button type="button" class="viewfinder-snap-btn" onclick="captureLocalStill()" title="Snap photo locally">
+          <div class="snap-inner"></div>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- IMAGE LIGHTBOX MODAL -->
+  <div id="image-lightbox-modal" class="modal-overlay hidden" aria-hidden="true" role="dialog" aria-label="Image Preview" onclick="closeImageLightbox()">
+    <div class="lightbox-content" onclick="event.stopPropagation()">
+      <button type="button" class="lightbox-close" onclick="closeImageLightbox()" aria-label="Close Preview">✕</button>
+      <div class="lightbox-image-wrap">
+        <img id="lightbox-img" src="" alt="Captured Image">
+      </div>
+      <div class="lightbox-footer">
+        <span id="lightbox-caption">Photo Preview</span>
+        <a id="lightbox-download-link" class="btn-file download" href="#" download="">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+          <span>Download Full Res</span>
+        </a>
       </div>
     </div>
   </div>

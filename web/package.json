@@ -28,6 +28,7 @@
     "ws": "^8.18.0"
   },
   "devDependencies": {
+    "selfsigned": "^5.5.0",
     "wrangler": "^3.100.0"
   }
 }

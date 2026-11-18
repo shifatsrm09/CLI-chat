@@ -22,6 +22,12 @@ const state = {
   incomingTransfers: {}, // id -> transferObj
   fileRegistry: {},      // id -> { id, filename, rawBytes, isIncoming }
   activeEditingTransferId: null,
+  isCaptureArmed: false,
+  captureStream: null,
+  activeCameraDeviceId: "",
+  availableCameras: [],
+  remoteCaptureDevices: {}, // username -> boolean
+  isViewfinderMinimized: false,
 };
 
 // DOM Elements
@@ -57,6 +63,19 @@ const elements = {
   fileEditorTextarea: document.getElementById("file-editor-textarea"),
   editorFilename: document.getElementById("editor-filename"),
   editorStatsInfo: document.getElementById("editor-stats-info"),
+  captureTriggerBtn: document.getElementById("capture-trigger-btn"),
+  makeCaptureBtn: document.getElementById("make-capture-btn"),
+  captureViewfinder: document.getElementById("capture-viewfinder"),
+  viewfinderVideo: document.getElementById("viewfinder-video"),
+  viewfinderFlash: document.getElementById("viewfinder-flash"),
+  viewfinderCameraSelect: document.getElementById("viewfinder-camera-select"),
+  viewfinderDragHandle: document.getElementById("viewfinder-drag-handle"),
+  viewfinderStatusText: document.getElementById("viewfinder-status-text"),
+  vfMinIcon: document.getElementById("vf-min-icon"),
+  imageLightboxModal: document.getElementById("image-lightbox-modal"),
+  lightboxImg: document.getElementById("lightbox-img"),
+  lightboxCaption: document.getElementById("lightbox-caption"),
+  lightboxDownloadLink: document.getElementById("lightbox-download-link"),
 };
 
 // Architectural color palette for avatars
@@ -80,6 +99,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   updateSoundUI();
   initMobileViewport();
   initDragAndDrop();
+  initViewfinderDrag();
 
   const savedUser = localStorage.getItem("cfat_username") || "";
   if (savedUser) {
@@ -224,6 +244,16 @@ function connectWebSocket() {
         } catch (_) {}
       }
     }, 20000);
+
+    // Query active capture devices in the room, and announce if we are armed
+    setTimeout(() => {
+      if (state.ws && state.ws.readyState === WebSocket.OPEN) {
+        state.ws.send(JSON.stringify({ type: "action", action: "capture_query" }));
+        if (state.isCaptureArmed) {
+          broadcastCaptureStatus(true);
+        }
+      }
+    }, 600);
   };
 
   state.ws.onmessage = (event) => {
@@ -353,6 +383,20 @@ function handleActionPacket(packet) {
 
     case "file_cancel":
       handlePeerFileCancel(packet);
+      break;
+
+    case "capture_status":
+      handlePeerCaptureStatus(sender, packet);
+      break;
+
+    case "capture_trigger":
+      handleRemoteCaptureTrigger(packet);
+      break;
+
+    case "capture_query":
+      if (state.isCaptureArmed) {
+        broadcastCaptureStatus(true);
+      }
       break;
   }
 }
@@ -1155,6 +1199,29 @@ function updateFileCardReady(cardEl, filename, sizeStr, downloadUrl, transferId,
   const pctSpan = cardEl.querySelector(".pct-text");
   if (pctSpan) pctSpan.textContent = "";
 
+  // Inline Image Preview for image files (captures, photos, graphics)
+  if (isImageFile(filename) && downloadUrl) {
+    let previewEl = cardEl.querySelector(".file-card-preview");
+    if (!previewEl) {
+      previewEl = document.createElement("div");
+      previewEl.className = "file-card-preview";
+      previewEl.onclick = () => openImageLightbox(downloadUrl, filename);
+      previewEl.innerHTML = `
+        <img src="${downloadUrl}" class="file-card-img" alt="${escapeHTML(filename)}" loading="lazy">
+        <div class="preview-overlay">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line><line x1="11" y1="8" x2="11" y2="14"></line><line x1="8" y1="11" x2="14" y2="11"></line></svg>
+          <span>View Photo</span>
+        </div>
+      `;
+      const mainEl = cardEl.querySelector(".file-card-main");
+      if (mainEl && mainEl.nextSibling) {
+        cardEl.insertBefore(previewEl, mainEl.nextSibling);
+      } else {
+        cardEl.appendChild(previewEl);
+      }
+    }
+  }
+
   const actions = cardEl.querySelector(".file-card-actions") || document.createElement("div");
   actions.className = "file-card-actions";
   
@@ -1182,6 +1249,42 @@ function updateFileCardReady(cardEl, filename, sizeStr, downloadUrl, transferId,
 
 function updateOutgoingFileCardDone(cardEl, text, transferId, filename, isText) {
   updateFileCardDone(cardEl, text);
+
+  // Render outgoing image preview so sender immediately sees what they captured/sent
+  if (isImageFile(filename) && transferId && cardEl) {
+    const regItem = state.fileRegistry[transferId] || state.outgoingTransfers[transferId];
+    if (regItem) {
+      let blobUrl = regItem.blobUrl || regItem.downloadUrl;
+      if (!blobUrl && (regItem.rawBytes || regItem.payload)) {
+        try {
+          blobUrl = URL.createObjectURL(new Blob([regItem.rawBytes || regItem.payload]));
+          regItem.blobUrl = blobUrl;
+        } catch (_) {}
+      }
+      if (blobUrl) {
+        let previewEl = cardEl.querySelector(".file-card-preview");
+        if (!previewEl) {
+          previewEl = document.createElement("div");
+          previewEl.className = "file-card-preview";
+          previewEl.onclick = () => openImageLightbox(blobUrl, filename);
+          previewEl.innerHTML = `
+            <img src="${blobUrl}" class="file-card-img" alt="${escapeHTML(filename)}" loading="lazy">
+            <div class="preview-overlay">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line><line x1="11" y1="8" x2="11" y2="14"></line><line x1="8" y1="11" x2="14" y2="11"></line></svg>
+              <span>View Photo</span>
+            </div>
+          `;
+          const mainEl = cardEl.querySelector(".file-card-main");
+          if (mainEl && mainEl.nextSibling) {
+            cardEl.insertBefore(previewEl, mainEl.nextSibling);
+          } else {
+            cardEl.appendChild(previewEl);
+          }
+        }
+      }
+    }
+  }
+
   if (isText && transferId && cardEl) {
     let actions = cardEl.querySelector(".file-card-actions");
     if (!actions) {
@@ -1329,6 +1432,12 @@ function setStatus(type, label) {
 }
 
 function leaveRoom() {
+  if (state.isCaptureArmed) {
+    stopCaptureDevice();
+  }
+  state.remoteCaptureDevices = {};
+  updateCaptureTriggerButtonVisibility();
+
   state.room = "";
   state.hasJoinedRoom = false;
   state.usernameTaken = false;
@@ -1620,7 +1729,434 @@ function downloadEditedFile() {
 }
 
 window.addEventListener("keydown", (e) => {
-  if (e.key === "Escape" && elements.fileEditorModal && !elements.fileEditorModal.classList.contains("hidden")) {
-    closeFileEditor();
+  if (e.key === "Escape") {
+    if (elements.imageLightboxModal && !elements.imageLightboxModal.classList.contains("hidden")) {
+      closeImageLightbox();
+      return;
+    }
+    if (elements.fileEditorModal && !elements.fileEditorModal.classList.contains("hidden")) {
+      closeFileEditor();
+      return;
+    }
   }
 });
+
+// ============================================================
+// REMOTE CAMERA & CAPTURE ENGINE
+// ============================================================
+
+function isImageFile(filename) {
+  const parts = (filename || "").toLowerCase().split(".");
+  const ext = parts.length > 1 ? parts.pop() : "";
+  return ["jpg", "jpeg", "png", "gif", "webp", "svg", "bmp"].includes(ext);
+}
+
+function stopMediaStreamTracks(stream) {
+  if (stream && typeof stream.getTracks === "function") {
+    stream.getTracks().forEach((track) => {
+      try { track.stop(); } catch (_) {}
+    });
+  }
+}
+
+async function initCameraDevices() {
+  if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) {
+    return [];
+  }
+  try {
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    const videoDevices = devices.filter((d) => d.kind === "videoinput");
+    state.availableCameras = videoDevices;
+
+    const select = elements.viewfinderCameraSelect;
+    if (!select) return videoDevices;
+
+    select.innerHTML = "";
+    if (videoDevices.length === 0) {
+      select.innerHTML = `<option value="">No cameras found</option>`;
+      return [];
+    }
+
+    videoDevices.forEach((dev, idx) => {
+      const opt = document.createElement("option");
+      opt.value = dev.deviceId;
+      const label = (dev.label || "").toLowerCase();
+      let friendlyName = "";
+
+      if (label.includes("ultra") || label.includes("0.5") || label.includes("wide angle")) {
+        friendlyName = `📐 Ultra Wide (${idx + 1})`;
+      } else if (label.includes("tele") || label.includes("zoom") || label.includes("2x") || label.includes("3x") || label.includes("5x")) {
+        friendlyName = `🔭 Telephoto (${idx + 1})`;
+      } else if (label.includes("front") || label.includes("selfie") || label.includes("user")) {
+        friendlyName = `🤳 Front Camera (${idx + 1})`;
+      } else if (label.includes("back") || label.includes("rear") || label.includes("environment")) {
+        friendlyName = `📷 Main Camera (${idx + 1})`;
+      } else if (dev.label) {
+        friendlyName = `📷 ${dev.label}`;
+      } else {
+        friendlyName = `📷 Camera ${idx + 1}`;
+      }
+
+      opt.textContent = friendlyName;
+      if (dev.deviceId === state.activeCameraDeviceId) {
+        opt.selected = true;
+      }
+      select.appendChild(opt);
+    });
+
+    return videoDevices;
+  } catch (err) {
+    console.warn("Camera enumeration error:", err);
+    return [];
+  }
+}
+
+async function toggleCaptureDeviceMode() {
+  if (state.isCaptureArmed) {
+    stopCaptureDevice();
+  } else {
+    await startCaptureDevice();
+  }
+}
+
+async function startCaptureDevice(preferredDeviceId = "") {
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    return showToast("Camera API not supported on this browser");
+  }
+
+  try {
+    stopMediaStreamTracks(state.captureStream);
+
+    const constraints = {
+      video: preferredDeviceId
+        ? { deviceId: { exact: preferredDeviceId }, width: { ideal: 1920 }, height: { ideal: 1080 } }
+        : { facingMode: { ideal: "environment" }, width: { ideal: 1920 }, height: { ideal: 1080 } },
+      audio: false,
+    };
+
+    const stream = await navigator.mediaDevices.getUserMedia(constraints);
+    state.captureStream = stream;
+    state.isCaptureArmed = true;
+
+    const track = stream.getVideoTracks()[0];
+    if (track) {
+      const settings = track.getSettings ? track.getSettings() : {};
+      state.activeCameraDeviceId = settings.deviceId || preferredDeviceId || "";
+    }
+
+    if (elements.viewfinderVideo) {
+      elements.viewfinderVideo.srcObject = stream;
+      try {
+        await elements.viewfinderVideo.play();
+      } catch (_) {}
+    }
+
+    await initCameraDevices();
+
+    if (elements.captureViewfinder) {
+      elements.captureViewfinder.classList.remove("hidden");
+    }
+    if (elements.makeCaptureBtn) {
+      elements.makeCaptureBtn.classList.add("active");
+      elements.makeCaptureBtn.title = "Camera active (click to turn off)";
+    }
+
+    broadcastCaptureStatus(true);
+    updateCaptureTriggerButtonVisibility();
+    showToast("Camera armed! Other devices can now take photos.");
+  } catch (err) {
+    console.error("Camera access failed:", err);
+    showToast(`Camera error: ${err.message || err.name}`);
+    stopCaptureDevice();
+  }
+}
+
+function stopCaptureDevice() {
+  state.isCaptureArmed = false;
+  stopMediaStreamTracks(state.captureStream);
+  state.captureStream = null;
+
+  if (elements.viewfinderVideo) {
+    elements.viewfinderVideo.srcObject = null;
+  }
+  if (elements.captureViewfinder) {
+    elements.captureViewfinder.classList.add("hidden");
+  }
+  if (elements.makeCaptureBtn) {
+    elements.makeCaptureBtn.classList.remove("active");
+    elements.makeCaptureBtn.title = "Make this a capture device";
+  }
+
+  broadcastCaptureStatus(false);
+  updateCaptureTriggerButtonVisibility();
+  showToast("Camera turned off");
+}
+
+async function switchCameraDevice(deviceId) {
+  if (!deviceId) return;
+  state.activeCameraDeviceId = deviceId;
+  await startCaptureDevice(deviceId);
+}
+
+function broadcastCaptureStatus(isArmed) {
+  if (!state.ws || state.ws.readyState !== WebSocket.OPEN) return;
+  state.ws.send(JSON.stringify({
+    type: "action",
+    action: "capture_status",
+    armed: isArmed,
+    deviceUser: state.username,
+  }));
+}
+
+function handlePeerCaptureStatus(sender, packet) {
+  if (!sender || sender === state.username) return;
+  if (packet.armed) {
+    state.remoteCaptureDevices[sender] = true;
+    showToast(`📷 ${sender} is ready as a capture camera!`);
+  } else {
+    delete state.remoteCaptureDevices[sender];
+  }
+  updateCaptureTriggerButtonVisibility();
+}
+
+function updateCaptureTriggerButtonVisibility() {
+  const btn = elements.captureTriggerBtn;
+  if (!btn) return;
+  const armedPeers = Object.keys(state.remoteCaptureDevices).filter(
+    (u) => state.remoteCaptureDevices[u] && u !== state.username
+  );
+
+  if (armedPeers.length > 0 || state.isCaptureArmed) {
+    btn.classList.remove("hidden");
+    const span = btn.querySelector(".btn-text");
+    if (span) span.textContent = "Capture";
+    btn.title = armedPeers.length > 0
+      ? `Take photo from ${armedPeers.join(", ")}`
+      : "Take photo with camera";
+  } else {
+    btn.classList.add("hidden");
+  }
+}
+
+function playShutterSound() {
+  if (!state.soundEnabled) return;
+  try {
+    if (!state.audioCtx) {
+      state.audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    }
+    const ctx = state.audioCtx;
+    if (ctx.state === "suspended") ctx.resume();
+    const now = ctx.currentTime;
+
+    const osc1 = ctx.createOscillator();
+    const gain1 = ctx.createGain();
+    osc1.type = "sine";
+    osc1.frequency.setValueAtTime(800, now);
+    osc1.frequency.exponentialRampToValueAtTime(150, now + 0.05);
+    gain1.gain.setValueAtTime(0.4, now);
+    gain1.gain.exponentialRampToValueAtTime(0.01, now + 0.05);
+    osc1.connect(gain1);
+    gain1.connect(ctx.destination);
+    osc1.start(now);
+    osc1.stop(now + 0.05);
+
+    const osc2 = ctx.createOscillator();
+    const gain2 = ctx.createGain();
+    osc2.type = "triangle";
+    osc2.frequency.setValueAtTime(600, now + 0.08);
+    osc2.frequency.exponentialRampToValueAtTime(100, now + 0.16);
+    gain2.gain.setValueAtTime(0.5, now + 0.08);
+    gain2.gain.exponentialRampToValueAtTime(0.01, now + 0.16);
+    osc2.connect(gain2);
+    gain2.connect(ctx.destination);
+    osc2.start(now + 0.08);
+    osc2.stop(now + 0.16);
+  } catch (_) {}
+}
+
+function triggerFlashEffect() {
+  const flash = elements.viewfinderFlash;
+  if (!flash) return;
+  flash.classList.remove("hidden");
+  flash.classList.add("active");
+  setTimeout(() => {
+    flash.classList.remove("active");
+    setTimeout(() => flash.classList.add("hidden"), 100);
+  }, 120);
+}
+
+async function takeCameraSnapshotBlob() {
+  if (!state.captureStream) return null;
+  const track = state.captureStream.getVideoTracks()[0];
+  if (!track || track.readyState !== "live") return null;
+
+  triggerFlashEffect();
+  playShutterSound();
+
+  if ("ImageCapture" in window) {
+    try {
+      const imageCapture = new ImageCapture(track);
+      const photoBlob = await imageCapture.takePhoto();
+      if (photoBlob && photoBlob.size > 0) {
+        return photoBlob;
+      }
+    } catch (err) {
+      console.warn("ImageCapture.takePhoto failed, falling back to canvas:", err);
+    }
+  }
+
+  const video = elements.viewfinderVideo;
+  if (!video) return null;
+
+  const w = video.videoWidth || 1920;
+  const h = video.videoHeight || 1080;
+  const canvas = document.createElement("canvas");
+  canvas.width = w;
+  canvas.height = h;
+  const ctx = canvas.getContext("2d");
+  ctx.drawImage(video, 0, 0, w, h);
+
+  return new Promise((resolve) => {
+    canvas.toBlob((blob) => resolve(blob), "image/jpeg", 0.92);
+  });
+}
+
+async function captureLocalStill() {
+  if (!state.isCaptureArmed) return;
+  showToast("Snapping photo...");
+  const blob = await takeCameraSnapshotBlob();
+  if (!blob) return showToast("Failed to capture photo frame");
+
+  const timestamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+  const filename = `photo_${state.username}_${timestamp}.jpg`;
+  const file = new File([blob], filename, { type: "image/jpeg" });
+  await sendFile(file);
+}
+
+async function handleRemoteCaptureTrigger(packet) {
+  if (!state.isCaptureArmed) return;
+  const requester = packet.requestedBy || packet.fromUser || "peer";
+  showToast(`📸 Photo triggered by ${requester}!`);
+
+  const blob = await takeCameraSnapshotBlob();
+  if (!blob) return console.warn("Failed to capture photo for remote trigger");
+
+  const timestamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+  const filename = `photo_${state.username}_${timestamp}.jpg`;
+  const file = new File([blob], filename, { type: "image/jpeg" });
+  await sendFile(file);
+}
+
+function triggerRemoteCapture() {
+  if (!state.ws || state.ws.readyState !== WebSocket.OPEN) {
+    return showToast("Not connected to room");
+  }
+
+  const armedPeers = Object.keys(state.remoteCaptureDevices).filter(
+    (u) => state.remoteCaptureDevices[u] && u !== state.username
+  );
+
+  if (armedPeers.length === 0 && state.isCaptureArmed) {
+    return captureLocalStill();
+  }
+
+  if (armedPeers.length === 0) {
+    return showToast("No capture camera device online in this room");
+  }
+
+  state.ws.send(JSON.stringify({
+    type: "action",
+    action: "capture_trigger",
+    requestedBy: state.username,
+  }));
+
+  showToast(`Triggering remote photo on ${armedPeers.join(", ")}...`);
+  playShutterSound();
+}
+
+function toggleViewfinderMinimize() {
+  if (!elements.captureViewfinder) return;
+  state.isViewfinderMinimized = !state.isViewfinderMinimized;
+  elements.captureViewfinder.classList.toggle("minimized", state.isViewfinderMinimized);
+  const minIcon = elements.vfMinIcon;
+  if (minIcon) {
+    minIcon.innerHTML = state.isViewfinderMinimized
+      ? `<rect x="5" y="5" width="14" height="14" stroke-width="2.5" fill="none"></rect>`
+      : `<line x1="5" y1="12" x2="19" y2="12"></line>`;
+  }
+}
+
+function openImageLightbox(url, filename) {
+  if (!elements.imageLightboxModal || !elements.lightboxImg) return;
+  elements.lightboxImg.src = url;
+  if (elements.lightboxCaption) {
+    elements.lightboxCaption.textContent = filename || "Photo";
+  }
+  if (elements.lightboxDownloadLink) {
+    elements.lightboxDownloadLink.href = url;
+    elements.lightboxDownloadLink.download = filename || "photo.jpg";
+  }
+  elements.imageLightboxModal.classList.remove("hidden");
+  elements.imageLightboxModal.setAttribute("aria-hidden", "false");
+}
+
+function closeImageLightbox() {
+  if (!elements.imageLightboxModal) return;
+  elements.imageLightboxModal.classList.add("hidden");
+  elements.imageLightboxModal.setAttribute("aria-hidden", "true");
+  if (elements.lightboxImg) elements.lightboxImg.src = "";
+}
+
+function initViewfinderDrag() {
+  const handle = elements.viewfinderDragHandle;
+  const container = elements.captureViewfinder;
+  if (!handle || !container) return;
+
+  let isDragging = false;
+  let startX = 0, startY = 0;
+  let initialLeft = 0, initialTop = 0;
+
+  function onStart(e) {
+    if (e.target.closest("button") || e.target.closest("select")) return;
+    isDragging = true;
+    const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+    const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+    startX = clientX;
+    startY = clientY;
+
+    const rect = container.getBoundingClientRect();
+    initialLeft = rect.left;
+    initialTop = rect.top;
+
+    container.style.bottom = "auto";
+    container.style.right = "auto";
+    container.style.left = `${initialLeft}px`;
+    container.style.top = `${initialTop}px`;
+  }
+
+  function onMove(e) {
+    if (!isDragging) return;
+    const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+    const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+    const dx = clientX - startX;
+    const dy = clientY - startY;
+
+    const newLeft = Math.max(10, Math.min(window.innerWidth - container.offsetWidth - 10, initialLeft + dx));
+    const newTop = Math.max(10, Math.min(window.innerHeight - container.offsetHeight - 10, initialTop + dy));
+
+    container.style.left = `${newLeft}px`;
+    container.style.top = `${newTop}px`;
+  }
+
+  function onEnd() {
+    isDragging = false;
+  }
+
+  handle.addEventListener("mousedown", onStart);
+  window.addEventListener("mousemove", onMove);
+  window.addEventListener("mouseup", onEnd);
+
+  handle.addEventListener("touchstart", onStart, { passive: true });
+  window.addEventListener("touchmove", onMove, { passive: true });
+  window.addEventListener("touchend", onEnd);
+}

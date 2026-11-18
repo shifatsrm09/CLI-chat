@@ -1346,3 +1346,436 @@ body {
   .msg-row { max-width: 90%; }
   .chat-footer { padding-inline: 12px; }
 }
+
+/* ============================================================
+   REMOTE CAMERA & CAPTURE DEVICE STYLING
+   ============================================================ */
+
+/* Header Capture Buttons */
+.header-cluster.right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.nav-btn.capture-trigger-btn {
+  width: auto;
+  min-width: 32px;
+  height: 30px;
+  padding: 0 11px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  background: #10b981;
+  color: #FFFFFF;
+  border: 1px solid #059669;
+  border-radius: var(--radius-sm);
+  font-size: 0.74rem;
+  font-weight: 600;
+  letter-spacing: 0.2px;
+  white-space: nowrap;
+  box-shadow: 0 0 12px rgba(16, 185, 129, 0.35);
+  animation: pulse-capture 2s infinite ease-in-out;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.nav-btn.capture-trigger-btn svg {
+  flex-shrink: 0;
+}
+
+.nav-btn.capture-trigger-btn:hover {
+  background: #059669;
+  color: #FFFFFF;
+  transform: translateY(-1px);
+}
+
+@keyframes pulse-capture {
+  0% { box-shadow: 0 0 8px rgba(16, 185, 129, 0.3); }
+  50% { box-shadow: 0 0 16px rgba(16, 185, 129, 0.6); }
+  100% { box-shadow: 0 0 8px rgba(16, 185, 129, 0.3); }
+}
+
+.nav-btn.capture-mode-btn {
+  width: auto;
+  min-width: 30px;
+  height: 30px;
+  padding: 0 10px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border-radius: var(--radius-sm);
+  font-size: 0.74rem;
+  font-weight: 500;
+  white-space: nowrap;
+  background: transparent;
+  border: 1px solid #272d35;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: all 0.15s ease;
+  flex-shrink: 0;
+}
+
+.nav-btn.capture-mode-btn svg {
+  flex-shrink: 0;
+}
+
+.nav-btn.capture-mode-btn:hover {
+  color: var(--text-bright);
+  border-color: var(--text-tertiary);
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.nav-btn.capture-mode-btn.active {
+  background: #5865F2;
+  color: #FFFFFF;
+  border-color: #4752c4;
+  box-shadow: 0 0 12px rgba(88, 101, 242, 0.45);
+}
+
+.nav-btn.capture-mode-btn.active:hover {
+  background: #4752c4;
+  color: #FFFFFF;
+}
+
+@media (max-width: 600px) {
+  .header-cluster.right {
+    gap: 6px;
+  }
+  .nav-btn.capture-mode-btn .btn-text {
+    display: none;
+  }
+  .nav-btn.capture-mode-btn {
+    width: 30px;
+    padding: 0;
+  }
+  .nav-btn.capture-trigger-btn {
+    padding: 0 8px;
+    font-size: 0.7rem;
+    gap: 4px;
+  }
+}
+
+/* Floating Viewfinder */
+.capture-viewfinder {
+  position: fixed;
+  bottom: 84px;
+  right: 20px;
+  width: 290px;
+  background: #12151e;
+  border: 1px solid var(--border-active);
+  border-radius: var(--radius-md);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.65);
+  z-index: 1000;
+  overflow: hidden;
+  transition: width 0.2s ease, transform 0.15s ease, opacity 0.15s ease;
+  user-select: none;
+}
+
+@media (max-width: 600px) {
+  .capture-viewfinder {
+    bottom: 74px;
+    right: 12px;
+    left: 12px;
+    width: auto;
+    max-width: calc(100vw - 24px);
+  }
+}
+
+.viewfinder-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  background: #181d29;
+  border-bottom: 1px solid var(--border-line);
+  cursor: grab;
+}
+
+.viewfinder-header:active {
+  cursor: grabbing;
+}
+
+.viewfinder-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: var(--text-bright);
+  letter-spacing: 0.3px;
+}
+
+.live-indicator {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #10b981;
+  box-shadow: 0 0 8px #10b981;
+  animation: pulse-live 1.6s infinite ease-in-out;
+}
+
+@keyframes pulse-live {
+  0% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.35; transform: scale(0.85); }
+  100% { opacity: 1; transform: scale(1); }
+}
+
+.viewfinder-controls {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.viewfinder-btn {
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  width: 22px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 3px;
+  cursor: pointer;
+  font-size: 0.8rem;
+  transition: all 0.15s ease;
+}
+
+.viewfinder-btn:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: #FFFFFF;
+}
+
+.viewfinder-btn.close:hover {
+  background: rgba(239, 68, 68, 0.25);
+  color: #ef4444;
+}
+
+.viewfinder-body {
+  position: relative;
+  width: 100%;
+  height: 200px;
+  background: #000000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+
+#viewfinder-video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.viewfinder-flash {
+  position: absolute;
+  inset: 0;
+  background: #FFFFFF;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.08s ease;
+  z-index: 6;
+}
+
+.viewfinder-flash.active {
+  opacity: 0.95;
+}
+
+.viewfinder-overlay-controls {
+  position: absolute;
+  bottom: 8px;
+  left: 8px;
+  right: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  z-index: 5;
+}
+
+.camera-select-wrap {
+  flex: 1;
+  position: relative;
+  min-width: 0;
+}
+
+#viewfinder-camera-select {
+  width: 100%;
+  padding: 5px 8px;
+  font-size: 0.70rem;
+  font-weight: 600;
+  color: #FFFFFF;
+  background: rgba(14, 17, 24, 0.88);
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  border-radius: var(--radius-sm);
+  outline: none;
+  cursor: pointer;
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  text-overflow: ellipsis;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+#viewfinder-camera-select option {
+  background: #12151e;
+  color: #FFFFFF;
+}
+
+.viewfinder-snap-btn {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.35);
+  border: 2px solid #FFFFFF;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  padding: 0;
+  flex-shrink: 0;
+  transition: transform 0.1s ease;
+}
+
+.viewfinder-snap-btn:active {
+  transform: scale(0.88);
+}
+
+.snap-inner {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: #ef4444;
+}
+
+/* Minimized Viewfinder */
+.capture-viewfinder.minimized {
+  width: auto;
+  border-color: var(--border-line);
+}
+
+.capture-viewfinder.minimized .viewfinder-body {
+  display: none;
+}
+
+/* Inline Image Preview inside File Cards */
+.file-card-preview {
+  position: relative;
+  width: 100%;
+  max-height: 240px;
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  background: rgba(0, 0, 0, 0.4);
+  cursor: pointer;
+  border: 1px solid var(--border-line);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-top: 4px;
+}
+
+.file-card-img {
+  width: 100%;
+  max-height: 240px;
+  object-fit: contain;
+  background: #050608;
+  display: block;
+  transition: transform 0.2s ease;
+}
+
+.file-card-preview:hover .file-card-img {
+  transform: scale(1.02);
+}
+
+.preview-overlay {
+  position: absolute;
+  inset: 0;
+  background: rgba(4, 6, 11, 0.45);
+  opacity: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  color: #FFFFFF;
+  font-size: 0.74rem;
+  font-weight: 600;
+  transition: opacity 0.15s ease;
+  pointer-events: none;
+}
+
+.file-card-preview:hover .preview-overlay {
+  opacity: 1;
+}
+
+/* Lightbox Modal */
+.lightbox-content {
+  position: relative;
+  max-width: 90vw;
+  max-height: 90vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  background: #12151e;
+  border: 1px solid var(--border-line);
+  border-radius: var(--radius-md);
+  padding: 16px;
+  gap: 12px;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.85);
+}
+
+.lightbox-close {
+  position: absolute;
+  top: 10px;
+  right: 12px;
+  background: rgba(0, 0, 0, 0.5);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  color: #FFFFFF;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.85rem;
+  z-index: 10;
+  transition: background 0.15s;
+}
+
+.lightbox-close:hover {
+  background: rgba(239, 68, 68, 0.8);
+}
+
+.lightbox-image-wrap {
+  max-width: 100%;
+  max-height: 75vh;
+  overflow: auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+#lightbox-img {
+  max-width: 100%;
+  max-height: 75vh;
+  object-fit: contain;
+  border-radius: var(--radius-sm);
+}
+
+.lightbox-footer {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding-top: 6px;
+  border-top: 1px solid var(--border-line);
+  font-size: 0.78rem;
+  color: var(--text-muted);
+}

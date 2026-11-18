@@ -1,9 +1,11 @@
 const http = require("http");
+const https = require("https");
 const fs = require("fs");
 const path = require("path");
 const { WebSocketServer } = require("ws");
 
 const PORT = process.env.PORT || 3000;
+const HTTPS_PORT = process.env.HTTPS_PORT || 3443;
 const PUBLIC_DIR = path.join(__dirname, "public");
 
 // MIME types
@@ -22,8 +24,11 @@ const MIME_TYPES = {
 // Map of roomName -> { metadata: { createdAt, game, host }, clients: Set<{ ws, username, role, game, joinedAt, msgCount, windowStart }> }
 const rooms = new Map();
 
-const server = http.createServer((req, res) => {
-  const url = new URL(req.url, `http://${req.headers.host}`);
+function handleHttpRequest(req, res) {
+  const isHttps = !!(req.socket.encrypted || req.headers["x-forwarded-proto"] === "https");
+  const protocol = isHttps ? "https" : "http";
+  const wsProtocol = isHttps ? "wss" : "ws";
+  const url = new URL(req.url, `${protocol}://${req.headers.host || "localhost"}`);
 
   // CORS headers
   res.setHeader("Access-Control-Allow-Origin", "*");
@@ -68,7 +73,7 @@ const server = http.createServer((req, res) => {
           service: "api.cfat.site (Local Dev)",
           version: "2.0.0",
           domain: "api.cfat.site",
-          wsUrl: `ws://${req.headers.host}/ws`,
+          wsUrl: `${wsProtocol}://${req.headers.host}/ws`,
           supportedGames: ["poker", "chat"],
           maxRoomPlayers: 16,
           timestamp: new Date().toISOString(),
@@ -122,7 +127,7 @@ const server = http.createServer((req, res) => {
           status: "ok",
           game: "poker",
           service: "api.cfat.site (Local Dev Poker Coordinator)",
-          wsUrl: `ws://${req.headers.host}/ws`,
+          wsUrl: `${wsProtocol}://${req.headers.host}/ws`,
           maxPlayers: 8,
           defaultBuyIn: 1000,
           defaultBlinds: [10, 20],
@@ -213,13 +218,31 @@ const server = http.createServer((req, res) => {
       res.end(content);
     }
   });
-});
+}
+
+const certPath = path.join(__dirname, "cert.pem");
+const keyPath = path.join(__dirname, "key.pem");
+
+let server;
+if (fs.existsSync(certPath) && fs.existsSync(keyPath)) {
+  server = https.createServer(
+    {
+      key: fs.readFileSync(keyPath),
+      cert: fs.readFileSync(certPath),
+    },
+    handleHttpRequest
+  );
+} else {
+  server = http.createServer(handleHttpRequest);
+}
 
 // Setup WebSocket server
 const wss = new WebSocketServer({ noServer: true });
 
-server.on("upgrade", (request, socket, head) => {
-  const url = new URL(request.url, `http://${request.headers.host}`);
+function handleUpgrade(request, socket, head) {
+  const isHttps = !!(request.socket.encrypted || (fs.existsSync(certPath) && fs.existsSync(keyPath)));
+  const protocol = isHttps ? "https" : "http";
+  const url = new URL(request.url, `${protocol}://${request.headers.host}`);
   if (url.pathname === "/ws") {
     wss.handleUpgrade(request, socket, head, (ws) => {
       wss.emit("connection", ws, request);
@@ -227,7 +250,9 @@ server.on("upgrade", (request, socket, head) => {
   } else {
     socket.destroy();
   }
-});
+}
+
+server.on("upgrade", handleUpgrade);
 
 wss.on("connection", (ws, request) => {
   const url = new URL(request.url, `http://${request.headers.host}`);
@@ -466,12 +491,12 @@ function sanitizeUsername(name) {
   return cleaned || "Player";
 }
 
-server.listen(PORT, () => {
+server.listen(PORT, "0.0.0.0", () => {
+  const isHttps = !!(fs.existsSync(certPath) && fs.existsSync(keyPath));
+  const scheme = isHttps ? "https" : "http";
   console.log(`\n======================================================`);
-  console.log(`🚀 api.cfat.site Engine & Local WebSocket Server Active`);
-  console.log(`   URL: http://localhost:${PORT}`);
-  console.log(`   Health: http://localhost:${PORT}/api/health`);
-  console.log(`   Config: http://localhost:${PORT}/api/config`);
-  console.log(`   Poker:  http://localhost:${PORT}/api/poker`);
+  console.log(`🚀 CFAT Chat Active (${scheme.toUpperCase()}) on Port ${PORT}`);
+  console.log(`   👉 Phone & PC: ${scheme}://192.168.0.157:${PORT}`);
+  console.log(`   👉 Local PC:   ${scheme}://localhost:${PORT}`);
   console.log(`======================================================\n`);
 });
