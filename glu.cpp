@@ -1,9 +1,14 @@
 /**
  * GLU Chat - Military-Grade Native Console Host with Fail-Safe Tray Integration
+ * & Custom Card-Style Security PIN Lock Screen
  *
  * Enhanced High-Reliability Native Host:
  *  - Zero runtime dependencies (statically linked, payload embedded)
  *  - 100% Fail-Safe System Tray interception: 'X' button NEVER terminates prematurely
+ *  - Security PIN Lock Screen: 4 sleek cards matching the exact design
+ *  - Shows typed characters in real time inside the cards
+ *  - Non-case-sensitive validation for "CFAT"
+ *  - Background process protection: locking to tray NEVER terminates child process or drops transfers
  *  - Non-blocking SendMessageTimeoutW + Geometric Titlebar Fallback
  *  - Kernel-level SetConsoleCtrlHandler protection against OS-level termination
  *  - Hook health watchdog timer with automated recovery
@@ -25,12 +30,14 @@
 #include <vector>
 
 #pragma comment(lib, "shell32.lib")
+#pragma comment(lib, "gdi32.lib")
 
 #define ID_TRAY_ICON       2001
 #define ID_TRAY_RESTORE    2002
 #define ID_TRAY_HIDE       2003
 #define ID_TRAY_EXIT       2004
 #define IDT_HOOK_WATCHDOG  5001
+#define IDT_WRONG_FLASH    6001
 
 #define WM_APP_TRAY        (WM_APP + 1)
 #define IDR_EMBEDDED_DEV   101
@@ -50,12 +57,23 @@ static HANDLE           g_hSingleMutex      = NULL;
 static HANDLE           g_hChildProcess     = NULL;
 static HANDLE           g_hWaitThread       = NULL;
 
+/* ─── Security PIN State ─────────────────────────────────────────────────── */
+static const wchar_t*   GLU_PIN_CODE        = L"CFAT";
+static bool             g_bIsLocked         = true; // Starts in locked state
+static HWND             g_hPinDialog        = NULL;
+static bool             g_bPinSuccess       = false;
+static wchar_t          g_szPinInput[8]     = {0};
+static int              g_nPinLen           = 0;
+static bool             g_bWrongFlash       = false;
+
 /* ─── Forward Declarations ───────────────────────────────────────────────── */
 LRESULT CALLBACK TrayHostWndProc(HWND, UINT, WPARAM, LPARAM);
+LRESULT CALLBACK PinDialogWndProc(HWND, UINT, WPARAM, LPARAM);
 LRESULT CALLBACK LowLevelMouseProc(int nCode, WPARAM wParam, LPARAM lParam);
 LRESULT CALLBACK LowLevelKeyboardProc(int nCode, WPARAM wParam, LPARAM lParam);
 BOOL WINAPI ConsoleCtrlHandler(DWORD dwCtrlType);
 DWORD WINAPI ChildWatcherThread(LPVOID);
+bool PromptForPin(HWND hParent);
 void ShowConsole(bool show);
 void ShowTrayBalloon(const std::wstring& title, const std::wstring& msg);
 void EnsureHooksInstalled();
@@ -171,7 +189,7 @@ DWORD WINAPI ChildWatcherThread(LPVOID) {
 BOOL WINAPI ConsoleCtrlHandler(DWORD dwCtrlType) {
     if (dwCtrlType == CTRL_CLOSE_EVENT || dwCtrlType == CTRL_C_EVENT || dwCtrlType == CTRL_BREAK_EVENT) {
         if (!g_bExiting) {
-            // Intercept close event: hide console to tray instead of terminating
+            // Intercept close event: lock & hide console to tray instead of terminating
             ShowConsole(false);
             return TRUE; // Signal handled to prevent process termination
         }
@@ -228,6 +246,263 @@ void EnsureHooksInstalled() {
     }
 }
 
+/* ─── Custom PIN Dialog Window Procedure (Card-Based Display) ────────────── */
+LRESULT CALLBACK PinDialogWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+    switch (msg) {
+        case WM_CREATE: {
+            g_nPinLen = 0;
+            g_szPinInput[0] = L'\0';
+            g_bWrongFlash = false;
+
+            // Enable Windows 10/11 Dark Mode on titlebar
+            HMODULE hDwm = LoadLibraryW(L"dwmapi.dll");
+            if (hDwm) {
+                typedef HRESULT (WINAPI *DwmSetWindowAttributeProc)(HWND, DWORD, LPCVOID, DWORD);
+                DwmSetWindowAttributeProc fn = (DwmSetWindowAttributeProc)GetProcAddress(hDwm, "DwmSetWindowAttribute");
+                if (fn) {
+                    BOOL bDark = TRUE;
+                    fn(hWnd, 20 /* DWMWA_USE_IMMERSIVE_DARK_MODE */, &bDark, sizeof(bDark));
+                    fn(hWnd, 19, &bDark, sizeof(bDark));
+                }
+                FreeLibrary(hDwm);
+            }
+            return 0;
+        }
+
+        case WM_TIMER: {
+            if (wParam == IDT_WRONG_FLASH) {
+                KillTimer(hWnd, IDT_WRONG_FLASH);
+                g_bWrongFlash = false;
+                g_nPinLen = 0;
+                g_szPinInput[0] = L'\0';
+                InvalidateRect(hWnd, NULL, FALSE);
+            }
+            return 0;
+        }
+
+        case WM_CHAR: {
+            if (g_bWrongFlash) return 0;
+
+            wchar_t ch = (wchar_t)wParam;
+
+            // Backspace deletes last character
+            if (ch == VK_BACK) {
+                if (g_nPinLen > 0) {
+                    g_nPinLen--;
+                    g_szPinInput[g_nPinLen] = L'\0';
+                    InvalidateRect(hWnd, NULL, FALSE);
+                }
+                return 0;
+            }
+
+            // Escape cancels
+            if (ch == VK_ESCAPE) {
+                g_bPinSuccess = false;
+                DestroyWindow(hWnd);
+                return 0;
+            }
+
+            // Printable characters
+            if (ch >= 32 && ch < 127) {
+                if (g_nPinLen < 4) {
+                    // Display uppercase as in the mockup
+                    g_szPinInput[g_nPinLen++] = (wchar_t)towupper(ch);
+                    g_szPinInput[g_nPinLen] = L'\0';
+                    InvalidateRect(hWnd, NULL, FALSE);
+
+                    // When 4 characters are entered, validate!
+                    if (g_nPinLen == 4) {
+                        if (_wcsicmp(g_szPinInput, GLU_PIN_CODE) == 0) {
+                            g_bPinSuccess = true;
+                            UpdateWindow(hWnd);
+                            Sleep(80); // Brief visual confirmation
+                            DestroyWindow(hWnd);
+                        } else {
+                            // Flash cards in warning red and clear
+                            g_bWrongFlash = true;
+                            InvalidateRect(hWnd, NULL, FALSE);
+                            SetTimer(hWnd, IDT_WRONG_FLASH, 280, NULL);
+                        }
+                    }
+                }
+                return 0;
+            }
+            break;
+        }
+
+        case WM_KEYDOWN: {
+            if (wParam == VK_BACK) {
+                if (!g_bWrongFlash && g_nPinLen > 0) {
+                    g_nPinLen--;
+                    g_szPinInput[g_nPinLen] = L'\0';
+                    InvalidateRect(hWnd, NULL, FALSE);
+                }
+                return 0;
+            }
+            if (wParam == VK_ESCAPE) {
+                g_bPinSuccess = false;
+                DestroyWindow(hWnd);
+                return 0;
+            }
+            break;
+        }
+
+        case WM_PAINT: {
+            PAINTSTRUCT ps;
+            HDC hdc = BeginPaint(hWnd, &ps);
+
+            RECT clientRect;
+            GetClientRect(hWnd, &clientRect);
+            int W = clientRect.right - clientRect.left;
+            int H = clientRect.bottom - clientRect.top;
+
+            // Double Buffering for 100% flicker-free rendering
+            HDC hdcMem = CreateCompatibleDC(hdc);
+            HBITMAP hbmMem = CreateCompatibleBitmap(hdc, W, H);
+            HBITMAP hbmOld = (HBITMAP)SelectObject(hdcMem, hbmMem);
+
+            // 1. Fill Background: Exact #251B2D (RGB 37, 27, 45)
+            HBRUSH hbrBg = CreateSolidBrush(RGB(37, 27, 45));
+            FillRect(hdcMem, &clientRect, hbrBg);
+            DeleteObject(hbrBg);
+
+            // 2. Card Layout (Exact dimensions from mockup):
+            // Width: 94px, Height: 132px, Spacing: 42px
+            const int cardW = 94;
+            const int cardH = 132;
+            const int cardGap = 42;
+            const int totalW = 4 * cardW + 3 * cardGap; // 502px
+            const int startX = (W - totalW) / 2;
+            const int startY = (H - cardH) / 2;
+
+            // Card brushes: Normal (#333333 / RGB 51,51,51) vs Wrong PIN flash
+            HBRUSH hbrCardNormal = CreateSolidBrush(RGB(51, 51, 51));
+            HBRUSH hbrCardWrong  = CreateSolidBrush(RGB(110, 32, 42));
+            HBRUSH hbrCard = g_bWrongFlash ? hbrCardWrong : hbrCardNormal;
+
+            // Font for letters: Segoe UI, ~74px height, clean crisp bold
+            HFONT hFontLetter = CreateFontW(
+                74, 0, 0, 0, FW_REGULAR, FALSE, FALSE, FALSE,
+                DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
+                DEFAULT_PITCH | FF_SWISS, L"Segoe UI"
+            );
+            HFONT hFontOld = (HFONT)SelectObject(hdcMem, hFontLetter);
+
+            SetBkMode(hdcMem, TRANSPARENT);
+            SetTextColor(hdcMem, RGB(255, 255, 255)); // Crisp White
+
+            // Draw the 4 cards
+            for (int i = 0; i < 4; ++i) {
+                int cx = startX + i * (cardW + cardGap);
+                RECT rcCard = { cx, startY, cx + cardW, startY + cardH };
+
+                // Draw card rectangle
+                FillRect(hdcMem, &rcCard, hbrCard);
+
+                // Draw typed character centered in card
+                if (i < g_nPinLen && !g_bWrongFlash) {
+                    wchar_t ch = g_szPinInput[i];
+                    DrawTextW(hdcMem, &ch, 1, &rcCard, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+                }
+            }
+
+            SelectObject(hdcMem, hFontOld);
+            DeleteObject(hFontLetter);
+            DeleteObject(hbrCardNormal);
+            DeleteObject(hbrCardWrong);
+
+            // Copy backbuffer to screen
+            BitBlt(hdc, 0, 0, W, H, hdcMem, 0, 0, SRCCOPY);
+
+            SelectObject(hdcMem, hbmOld);
+            DeleteObject(hbmMem);
+            DeleteDC(hdcMem);
+
+            EndPaint(hWnd, &ps);
+            return 0;
+        }
+
+        case WM_ERASEBKGND:
+            return 1; // Handled in double-buffered WM_PAINT
+
+        case WM_CLOSE: {
+            g_bPinSuccess = false;
+            DestroyWindow(hWnd);
+            return 0;
+        }
+    }
+    return DefWindowProcW(hWnd, msg, wParam, lParam);
+}
+
+/* ─── Security PIN Prompt (Modal Window) ─────────────────────────────────── */
+bool PromptForPin(HWND hParent) {
+    if (g_hPinDialog && IsWindow(g_hPinDialog)) {
+        ShowWindow(g_hPinDialog, SW_RESTORE);
+        SetForegroundWindow(g_hPinDialog);
+        return false;
+    }
+
+    g_bPinSuccess = false;
+
+    static bool s_classRegistered = false;
+    if (!s_classRegistered) {
+        WNDCLASSEXW wcp = { sizeof(wcp) };
+        wcp.lpfnWndProc   = PinDialogWndProc;
+        wcp.hInstance     = g_hInstance;
+        wcp.lpszClassName = L"GLUPinDialogClass";
+        wcp.hIcon         = (HICON)LoadImageW(g_hInstance, MAKEINTRESOURCEW(1), IMAGE_ICON, 0, 0, LR_DEFAULTSIZE | LR_SHARED);
+        wcp.hIconSm       = (HICON)LoadImageW(g_hInstance, MAKEINTRESOURCEW(1), IMAGE_ICON, 16, 16, LR_SHARED);
+        wcp.hCursor       = LoadCursorW(NULL, IDC_ARROW);
+        wcp.hbrBackground = NULL;
+
+        RegisterClassExW(&wcp);
+        s_classRegistered = true;
+    }
+
+    // Sized to match the exact mockup proportions: ~760 x 400 client area
+    RECT wr = { 0, 0, 760, 400 };
+    DWORD dwStyle = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX;
+    AdjustWindowRectEx(&wr, dwStyle, FALSE, 0);
+
+    int winW = wr.right - wr.left;
+    int winH = wr.bottom - wr.top;
+    int screenW = GetSystemMetrics(SM_CXSCREEN);
+    int screenH = GetSystemMetrics(SM_CYSCREEN);
+    int posX = (screenW - winW) / 2;
+    int posY = (screenH - winH) / 2;
+
+    HWND hDlg = CreateWindowExW(
+        0,
+        L"GLUPinDialogClass",
+        L"\u2713 glu",
+        dwStyle,
+        posX, posY, winW, winH,
+        NULL, NULL, g_hInstance, NULL
+    );
+
+    if (!hDlg) return false;
+
+    g_hPinDialog = hDlg;
+
+    HICON hIcon = (HICON)LoadImageW(g_hInstance, MAKEINTRESOURCEW(1), IMAGE_ICON, 16, 16, LR_SHARED);
+    if (hIcon) {
+        SendMessageW(hDlg, WM_SETICON, ICON_SMALL, (LPARAM)hIcon);
+    }
+
+    ShowWindow(hDlg, SW_SHOW);
+    SetForegroundWindow(hDlg);
+
+    // Modal message loop
+    MSG msg;
+    while (IsWindow(hDlg) && GetMessageW(&msg, NULL, 0, 0)) {
+        TranslateMessage(&msg);
+        DispatchMessageW(&msg);
+    }
+
+    g_hPinDialog = NULL;
+    return g_bPinSuccess;
+}
+
 /* ─── Entry Point ────────────────────────────────────────────────────────── */
 int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow) {
     g_hInstance = hInstance;
@@ -249,6 +524,11 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow) {
     // 2. Allocate dedicated native Windows Console
     AllocConsole();
     g_hConsole = GetConsoleWindow();
+
+    // Immediately hide the console window until initial PIN is validated
+    if (g_hConsole) {
+        ShowWindow(g_hConsole, SW_HIDE);
+    }
 
     // Install Kernel-Level Console Control Handler
     SetConsoleCtrlHandler(ConsoleCtrlHandler, TRUE);
@@ -398,7 +678,17 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow) {
     // 9. Background thread waits for child to exit
     g_hWaitThread = CreateThread(NULL, 0, ChildWatcherThread, NULL, 0, NULL);
 
-    // 10. Message Loop
+    // 10. Initial PIN Security Check: Requires "CFAT" before revealing interface
+    if (!PromptForPin(NULL)) {
+        // User cancelled initial PIN authentication -> clean exit
+        Cleanup();
+        return 0;
+    }
+
+    // PIN validated successfully -> show the interface!
+    ShowConsole(true);
+
+    // 11. Message Loop
     MSG msg;
     while (GetMessageW(&msg, NULL, 0, 0)) {
         TranslateMessage(&msg);
@@ -409,16 +699,18 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow) {
     return 0;
 }
 
-/* ─── Show / Hide Console ────────────────────────────────────────────────── */
+/* ─── Show / Hide Console (With Lock Tracking) ───────────────────────────── */
 void ShowConsole(bool show) {
     if (!g_hConsole || !IsWindow(g_hConsole)) return;
 
     if (show) {
+        g_bIsLocked = false;
         ShowWindow(g_hConsole, SW_RESTORE);
         SetForegroundWindow(g_hConsole);
     } else {
+        g_bIsLocked = true;
         ShowWindow(g_hConsole, SW_HIDE);
-        ShowTrayBalloon(L"glu", L"glu is running in the background. Double-click tray icon to reopen.");
+        ShowTrayBalloon(L"glu", L"glu is locked in the background. Double-click tray icon to unlock.");
     }
 }
 
@@ -430,14 +722,14 @@ LRESULT CALLBACK LowLevelMouseProc(int nCode, WPARAM wParam, LPARAM lParam) {
         if (wParam == WM_LBUTTONDOWN || wParam == WM_NCLBUTTONDOWN) {
             if (IsPointInConsoleCloseButton(pMouse->pt)) {
                 g_bCloseMouseDown = true;
-                ShowConsole(false);
-                return 1; // Drop mouse down so conhost never terminates!
+                ShowConsole(false); // Locks and hides to tray
+                return 1;           // Drop mouse down so conhost never terminates!
             }
         } else if (wParam == WM_LBUTTONUP || wParam == WM_NCLBUTTONUP) {
             if (g_bCloseMouseDown || IsPointInConsoleCloseButton(pMouse->pt)) {
                 g_bCloseMouseDown = false;
-                ShowConsole(false);
-                return 1; // Drop mouse up
+                ShowConsole(false); // Locks and hides to tray
+                return 1;           // Drop mouse up
             }
         }
     }
@@ -450,14 +742,14 @@ LRESULT CALLBACK LowLevelKeyboardProc(int nCode, WPARAM wParam, LPARAM lParam) {
         KBDLLHOOKSTRUCT* pKbd = (KBDLLHOOKSTRUCT*)lParam;
         if (pKbd->vkCode == VK_F4 && (pKbd->flags & LLKHF_ALTDOWN)) {
             if (GetForegroundWindow() == g_hConsole) {
-                ShowConsole(false);
-                return 1; // Drop Alt+F4
+                ShowConsole(false); // Locks and hides to tray
+                return 1;           // Drop Alt+F4
             }
         }
         // Intercept Alt+Space system menu shortcut
         if (pKbd->vkCode == VK_SPACE && (pKbd->flags & LLKHF_ALTDOWN)) {
             if (GetForegroundWindow() == g_hConsole) {
-                ShowConsole(false);
+                ShowConsole(false); // Locks and hides to tray
                 return 1;
             }
         }
@@ -477,14 +769,21 @@ LRESULT CALLBACK TrayHostWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPar
 
         case WM_APP_TRAY: {
             if (lParam == WM_LBUTTONDBLCLK) {
-                ShowConsole(true);
+                // If locked, prompt for PIN first!
+                if (g_bIsLocked) {
+                    if (PromptForPin(g_hWndHost)) {
+                        ShowConsole(true);
+                    }
+                } else {
+                    ShowConsole(true);
+                }
             }
             else if (lParam == WM_RBUTTONUP) {
                 POINT pt;
                 GetCursorPos(&pt);
                 HMENU hMenu = CreatePopupMenu();
-                AppendMenuW(hMenu, MF_STRING, ID_TRAY_RESTORE, L"Show Terminal");
-                AppendMenuW(hMenu, MF_STRING, ID_TRAY_HIDE,    L"Hide to Tray");
+                AppendMenuW(hMenu, MF_STRING, ID_TRAY_RESTORE, g_bIsLocked ? L"Unlock Terminal..." : L"Show Terminal");
+                AppendMenuW(hMenu, MF_STRING, ID_TRAY_HIDE,    L"Lock to Tray");
                 AppendMenuW(hMenu, MF_SEPARATOR, 0, NULL);
                 AppendMenuW(hMenu, MF_STRING, ID_TRAY_EXIT,    L"Exit glu");
 
@@ -493,7 +792,13 @@ LRESULT CALLBACK TrayHostWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPar
                 DestroyMenu(hMenu);
 
                 if (cmd == ID_TRAY_RESTORE) {
-                    ShowConsole(true);
+                    if (g_bIsLocked) {
+                        if (PromptForPin(g_hWndHost)) {
+                            ShowConsole(true);
+                        }
+                    } else {
+                        ShowConsole(true);
+                    }
                 } else if (cmd == ID_TRAY_HIDE) {
                     ShowConsole(false);
                 } else if (cmd == ID_TRAY_EXIT) {
@@ -529,6 +834,11 @@ void ShowTrayBalloon(const std::wstring& title, const std::wstring& msg) {
 /* ─── Cleanup ────────────────────────────────────────────────────────────── */
 void Cleanup() {
     g_bExiting = true;
+
+    if (g_hPinDialog && IsWindow(g_hPinDialog)) {
+        DestroyWindow(g_hPinDialog);
+        g_hPinDialog = NULL;
+    }
 
     if (g_hWndHost) {
         KillTimer(g_hWndHost, IDT_HOOK_WATCHDOG);
